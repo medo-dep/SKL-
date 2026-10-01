@@ -9,7 +9,7 @@ description: Open the Raw-to-Reel one-click video editor (local web page in Chro
 2. For captions / filler-word / bad-take removal, make sure Whisper is installed:
    `python3 -c "import faster_whisper"` — if it fails, run `pip install faster-whisper`.
 3. Start the server in the background from the repo root:
-   `python3 raw-to-reel/server.py`
+   `python3 raw-to-reel/server.py` (on Windows: `python raw-to-reel\server.py`, or double-click `start-windows.bat`)
    It opens http://127.0.0.1:4680 in the default browser (Chrome). Tell the user to pick their video(s), toggle the edits, and click "ابدأ المونتاج".
 4. When the user says the edit finished, read the newest `raw-to-reel/workspace/jobs/*/result.json` and `job.json`, summarise what was cut (input vs output length, segments), and apply any "notes" in `job.json` by re-running `python3 raw-to-reel/editor.py <inputs> --out <job dir> --options '<json>'` with adjusted options.
 5. If DaVinci Resolve is installed and open, run `python3 raw-to-reel/workspace/jobs/<job>/resolve_import.py` to build the timeline inside Resolve. Otherwise tell the user to import `timeline.edl` via File › Import › Timeline and relink to their original clips.

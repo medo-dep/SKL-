@@ -46,17 +46,20 @@ def main():
 
     pool = project.GetMediaPool()
     files = sorted({c["file"] for c in cuts})
-    items = {os.path.abspath(i.GetClipProperty("File Path")): i for i in pool.ImportMedia(files)}
+    def key(path):
+        return os.path.normcase(os.path.abspath(path))
+
+    items = {key(i.GetClipProperty("File Path")): i for i in pool.ImportMedia(files)}
     final = os.path.join(here, "final.mp4")
     if os.path.exists(final):
         pool.ImportMedia([final])
 
     timeline = pool.CreateEmptyTimeline("Reel - cut")
     clips = [{
-        "mediaPoolItem": items[c["file"]],
+        "mediaPoolItem": items[key(c["file"])],
         "startFrame": int(round(c["start"] * c["fps"])),
         "endFrame": int(round(c["end"] * c["fps"])) - 1,
-    } for c in cuts if c["file"] in items]
+    } for c in cuts if key(c["file"]) in items]
     pool.AppendToTimeline(clips)
 
     srt = os.path.join(here, "captions.srt")

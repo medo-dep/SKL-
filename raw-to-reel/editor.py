@@ -342,10 +342,10 @@ def render(job_dir, segments, opts, music, log):
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
                 "-c:a", "aac", "-b:a", "192k", part]
         run(cmd)
-        listing.append(f"file '{part}'")
+        listing.append(f"file 'parts/{n:04d}.mp4'")  # relative: avoids Windows backslash/encoding issues
         log(f"قص المقطع {n + 1}/{len(segments)}", progress=0.3 + 0.5 * (n + 1) / len(segments))
 
-    with open(os.path.join(job_dir, "parts.txt"), "w") as f:
+    with open(os.path.join(job_dir, "parts.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(listing))
     joined = os.path.join(job_dir, "joined.mp4")
     run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", "parts.txt",
