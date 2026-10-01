@@ -41,7 +41,7 @@ DEFAULT_OPTIONS = {
 
 
 def run(cmd, cwd=None):
-    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, encoding="utf-8", errors="replace")
     if proc.returncode != 0:
         raise RuntimeError(f"{cmd[0]} failed:\n{proc.stderr[-2000:]}")
     return proc
@@ -72,7 +72,7 @@ def detect_silences(path, duration, noise_db=-32, min_silence=0.45):
     proc = subprocess.run(
         ["ffmpeg", "-hide_banner", "-nostats", "-i", path, "-af",
          f"silencedetect=noise={noise_db}dB:d={min_silence}", "-f", "null", "-"],
-        capture_output=True, text=True,
+        capture_output=True, encoding="utf-8", errors="replace",
     )
     silences, start = [], None
     for line in proc.stderr.splitlines():

@@ -36,8 +36,12 @@ function upload(file, kind, onProgress) {
     const xhr = new XMLHttpRequest();
     xhr.open("PUT", `/api/upload?kind=${kind}&name=${encodeURIComponent(file.name)}`);
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress && onProgress(e.loaded / e.total);
-    xhr.onload = () => (xhr.status === 200 ? resolve(JSON.parse(xhr.responseText)) : reject(xhr.responseText));
-    xhr.onerror = () => reject("فشل الرفع");
+    xhr.onload = () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch (e) {}
+      xhr.status === 200 ? resolve(data) : reject(data.error || `فشل الرفع (${xhr.status})`);
+    };
+    xhr.onerror = () => reject("فشل الرفع: الاتصال بالسيرفر انقطع. تأكد إن النافذة السوداء مفتوحة");
     xhr.send(file);
   });
 }
@@ -55,7 +59,12 @@ function addClips(files) {
     $("clips").appendChild(el);
     upload(file, "video", (p) => (el.querySelector(".bar").style.width = `${p * 100}%`))
       .then((res) => { clip.id = res.id; clip.uploading = false; el.querySelector(".bar").style.width = "0"; refresh(); })
-      .catch((err) => { el.querySelector("div").textContent = `❌ ${err}`; clip.uploading = false; refresh(); });
+      .catch((err) => {
+        el.querySelector("div").textContent = "❌ فشل الرفع";
+        clip.uploading = false;
+        refresh();
+        $("log").textContent = `❌ ${file.name}: ${err}`;
+      });
   }
   refresh();
 }

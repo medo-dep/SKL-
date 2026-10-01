@@ -89,7 +89,15 @@ class Handler(SimpleHTTPRequestHandler):
                     break
                 f.write(chunk)
                 remaining -= len(chunk)
-        info = editor.probe(path)
+        if remaining > 0:
+            os.remove(path)
+            return self.send_json({"error": "انقطع الرفع قبل ما يكتمل، جرّب مرة ثانية"}, 400)
+        try:
+            info = editor.probe(path)
+        except Exception as exc:  # not a readable media file, or ffprobe missing
+            traceback.print_exc()
+            os.remove(path)
+            return self.send_json({"error": f"تعذّر قراءة الملف: {str(exc)[-300:]}"}, 400)
         self.send_json({"id": name, "kind": kind, "duration": info["duration"]})
 
     def do_POST(self):
