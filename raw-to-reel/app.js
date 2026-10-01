@@ -121,6 +121,7 @@ function showResult(id, r) {
   $("result").innerHTML = `
     <video controls src="${base}${r.final}"></video>
     <div style="font-size:13px;margin-top:8px">من ${r.input_seconds} ث ← ${r.output_seconds} ث (${r.segments} لقطة)</div>
+    ${r.captions_missing ? `<div style="font-size:13px;margin-top:8px;color:#c0392b">⚠️ الترجمة ما انعملت لأن تفريغ الصوت فشل. ارجع فوق في السجل وشوف السطر اللي فيه ⚠️</div>` : ""}
     <div class="downloads">
       ${link(r.final, "⬇️ تحميل الفيديو النهائي MP4")}
       ${link(r.edl, "🎬 Timeline لـ DaVinci Resolve (EDL)")}

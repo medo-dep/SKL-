@@ -100,16 +100,23 @@ def transcribe(path, model_name, language, log):
 def _transcribe(path, model_name, lang, log):
     try:
         from faster_whisper import WhisperModel
-
-        log(f"تفريغ الصوت بـ faster-whisper ({model_name})...")
-        model = WhisperModel(model_name, device="auto", compute_type="int8")
-        segments, _ = model.transcribe(path, language=lang, word_timestamps=True)
-        return [
-            {"start": w.start, "end": w.end, "text": w.word.strip()}
-            for seg in segments for w in (seg.words or [])
-        ]
     except ImportError:
-        pass
+        WhisperModel = None
+    if WhisperModel:
+        def run_on(device):
+            model = WhisperModel(model_name, device=device, compute_type="int8")
+            segments, _ = model.transcribe(path, language=lang, word_timestamps=True)
+            return [
+                {"start": w.start, "end": w.end, "text": w.word.strip()}
+                for seg in segments for w in (seg.words or [])
+            ]
+
+        log(f"تفريغ الصوت بـ faster-whisper ({model_name})... أول مرة ينزّل النموذج وياخذ وقت")
+        try:
+            return run_on("auto")
+        except Exception as exc:  # usually missing CUDA DLLs (cublas/cudnn) on NVIDIA laptops
+            log(f"⚠️ تعذّر التشغيل على كرت الشاشة ({str(exc)[:120]})، أعيد المحاولة على المعالج...")
+            return run_on("cpu")
     try:
         import whisper
 
@@ -416,6 +423,7 @@ def process(job_dir, inputs, options, music=None, log=print):
         "final": "final.mp4",
         "edl": "timeline.edl",
         "srt": "captions.srt" if chunks else None,
+        "captions_missing": bool(opts["captions"] and not chunks),
         "resolve_script": "resolve_import.py",
         "segments": len(segments),
         "input_seconds": round(total_in, 2),
