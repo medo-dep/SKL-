@@ -1,22 +1,27 @@
 const $ = (id) => document.getElementById(id);
 const clips = []; // { id, name, el, uploading }
-let musicId = null;
+const assets = { music: null, logo: null, broll: [] };
 
 const STORE = "raw-to-reel-options";
 const saved = JSON.parse(localStorage.getItem(STORE) || "{}");
 
 document.querySelectorAll("[data-opt]").forEach((el) => {
   const key = el.dataset.opt;
-  if (key in saved) el.type === "checkbox" ? (el.checked = saved[key]) : (el.value = saved[key]);
+  if (key in saved) {
+    if (el.type === "checkbox") el.checked = saved[key];
+    else if (el.type === "radio") el.checked = el.value === saved[key];
+    else el.value = saved[key];
+  }
   el.addEventListener("change", () => { syncSubs(); saveOptions(); });
 });
 
 function readOptions() {
   const opts = {};
   document.querySelectorAll("[data-opt]").forEach((el) => {
-    opts[el.dataset.opt] = el.type === "checkbox" ? el.checked : el.value;
+    if (el.type === "radio") { if (el.checked) opts[el.dataset.opt] = el.value; }
+    else opts[el.dataset.opt] = el.type === "checkbox" ? el.checked : el.value;
   });
-  opts.target_length = Number(opts.target_length || 0);
+  for (const k of ["target_length", "reel_length", "speed"]) opts[k] = Number(opts[k] || 0);
   return opts;
 }
 
@@ -83,14 +88,26 @@ $("drop").ondragover = (e) => { e.preventDefault(); $("drop").classList.add("ove
 $("drop").ondragleave = () => $("drop").classList.remove("over");
 $("drop").ondrop = (e) => { e.preventDefault(); $("drop").classList.remove("over"); addClips(e.dataTransfer.files); };
 
-$("musicPicker").onchange = async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  $("musicName").textContent = "جارٍ الرفع...";
-  const res = await upload(file, "music");
-  musicId = res.id;
-  $("musicName").textContent = `✓ ${file.name}`;
-};
+function picker(input, label, kind, multiple) {
+  $(input).onchange = async (e) => {
+    const files = [...e.target.files];
+    if (!files.length) return;
+    $(label).style.color = "";
+    $(label).textContent = "جارٍ الرفع...";
+    try {
+      const ids = [];
+      for (const f of files) ids.push((await upload(f, kind)).id);
+      if (multiple) assets[kind] = ids; else assets[kind] = ids[0];
+      $(label).textContent = `✓ ${files.map((f) => f.name).join("، ")}`;
+    } catch (err) {
+      $(label).style.color = "#c0392b";
+      $(label).textContent = `❌ ${err}`;
+    }
+  };
+}
+picker("musicPicker", "musicName", "music", false);
+picker("logoPicker", "logoName", "logo", false);
+picker("brollPicker", "brollName", "broll", true);
 
 $("go").onclick = async () => {
   $("go").disabled = true;
@@ -99,7 +116,7 @@ $("go").onclick = async () => {
   const res = await fetch("/api/edit", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ videos: clips.filter((c) => c.id).map((c) => c.id), music: musicId, options: readOptions() }),
+    body: JSON.stringify({ videos: clips.filter((c) => c.id).map((c) => c.id), ...assets, options: readOptions() }),
   }).then((r) => r.json());
   if (res.error) { $("log").textContent = res.error; $("go").disabled = false; return; }
   poll(res.id);
@@ -118,14 +135,24 @@ async function poll(id) {
 function showResult(id, r) {
   const base = `/workspace/jobs/${id}/`;
   const link = (file, label) => (file ? `<a href="${base}${file}" download>${label}</a>` : "");
+  const many = r.reels.length > 1;
+  const reels = r.reels.map((reel, i) => `
+    <div class="reel">
+      ${many ? `<h3>ريل ${i + 1} (${reel.seconds} ث)</h3>` : ""}
+      <video controls preload="metadata" src="${base}${reel.final}"></video>
+      <div class="downloads">
+        ${link(reel.final, "⬇️ تحميل الفيديو MP4")}
+        ${link(reel.thumbnail, "🖼️ صورة الغلاف")}
+        ${link(reel.srt, "💬 ملف الترجمة SRT")}
+        ${link(reel.srt_en, "🇬🇧 الترجمة الإنجليزية SRT")}
+      </div>
+    </div>`).join("");
   $("result").innerHTML = `
-    <video controls src="${base}${r.final}"></video>
-    <div style="font-size:13px;margin-top:8px">من ${r.input_seconds} ث ← ${r.output_seconds} ث (${r.segments} لقطة)</div>
-    ${r.captions_missing ? `<div style="font-size:13px;margin-top:8px;color:#c0392b">⚠️ الترجمة ما انعملت لأن تفريغ الصوت فشل. ارجع فوق في السجل وشوف السطر اللي فيه ⚠️</div>` : ""}
-    <div class="downloads">
-      ${link(r.final, "⬇️ تحميل الفيديو النهائي MP4")}
+    <div style="font-size:13px;margin-top:10px">من ${r.input_seconds} ث ← ${r.output_seconds} ث (${r.segments} لقطة${many ? `، ${r.reels.length} ريلز` : ""})</div>
+    ${r.captions_missing ? `<div class="warn">⚠️ الترجمة ما انعملت لأن تفريغ الصوت فشل. ارجع فوق في السجل وشوف السطر اللي فيه ⚠️</div>` : ""}
+    ${reels}
+    <div class="downloads reel">
       ${link(r.edl, "🎬 Timeline لـ DaVinci Resolve (EDL)")}
-      ${link(r.srt, "💬 ملف الترجمة SRT")}
       ${link(r.resolve_script, "🐍 سكربت فتح المشروع في Resolve")}
     </div>`;
 }

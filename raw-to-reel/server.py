@@ -19,6 +19,7 @@ UPLOADS = os.path.join(WORK, "uploads")
 JOBS_DIR = os.path.join(WORK, "jobs")
 PORT = int(os.environ.get("PORT", "4680"))
 JOBS = {}
+UPLOAD_KINDS = ("video", "music", "logo", "broll")
 
 
 def safe_name(name):
@@ -26,7 +27,7 @@ def safe_name(name):
     return re.sub(r"[^\w.\- ]", "_", name) or "file"
 
 
-def run_job(job_id, inputs, options, music):
+def run_job(job_id, inputs, options, assets):
     job = JOBS[job_id]
 
     def log(msg, progress=None):
@@ -35,7 +36,7 @@ def run_job(job_id, inputs, options, music):
             job["progress"] = progress
 
     try:
-        job["result"] = editor.process(job["dir"], inputs, options, music, log)
+        job["result"] = editor.process(job["dir"], inputs, options, assets, log)
         job["status"] = "done"
     except Exception as exc:  # report any pipeline failure to the UI
         traceback.print_exc()
@@ -76,7 +77,9 @@ class Handler(SimpleHTTPRequestHandler):
         if url.path != "/api/upload":
             return self.send_error(404)
         qs = parse_qs(url.query)
-        kind = "music" if qs.get("kind") == ["music"] else "video"
+        kind = qs.get("kind", ["video"])[0]
+        if kind not in UPLOAD_KINDS:
+            return self.send_json({"error": "نوع ملف غير معروف"}, 400)
         folder = os.path.join(UPLOADS, kind)
         os.makedirs(folder, exist_ok=True)
         name = f"{int(time.time())}-{safe_name(qs.get('name', ['file'])[0])}"
@@ -108,20 +111,28 @@ class Handler(SimpleHTTPRequestHandler):
         inputs = [p for p in inputs if os.path.exists(p)]
         if not inputs:
             return self.send_json({"error": "اختر فيديو واحد على الأقل"}, 400)
-        music = None
-        if body.get("music"):
-            music = os.path.join(UPLOADS, "music", safe_name(body["music"]))
-            music = music if os.path.exists(music) else None
+
+        def uploaded(kind, name):
+            path = os.path.join(UPLOADS, kind, safe_name(name)) if name else None
+            return path if path and os.path.exists(path) else None
+
+        assets = {
+            "music": uploaded("music", body.get("music")),
+            "logo": uploaded("logo", body.get("logo")),
+            "broll": [p for p in (uploaded("broll", b) for b in body.get("broll", [])) if p],
+        }
+        options = body.get("options", {})
 
         job_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
         job_dir = os.path.join(JOBS_DIR, job_id)
         os.makedirs(job_dir, exist_ok=True)
         with open(os.path.join(job_dir, "job.json"), "w", encoding="utf-8") as f:
-            json.dump({"inputs": inputs, "music": music, "options": body.get("options", {})},
+            json.dump({"inputs": inputs, "assets": assets,
+                       "options": {k: v for k, v in options.items() if k != "pexels_key"}},
                       f, ensure_ascii=False, indent=2)
         JOBS[job_id] = {"id": job_id, "dir": job_dir, "status": "running", "progress": 0.0,
                         "log": [], "result": None}
-        threading.Thread(target=run_job, args=(job_id, inputs, body.get("options", {}), music),
+        threading.Thread(target=run_job, args=(job_id, inputs, options, assets),
                          daemon=True).start()
         self.send_json({"id": job_id})
 

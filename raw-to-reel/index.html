@@ -12,11 +12,12 @@
   header .logo { color: var(--orange); font-size: 26px; }
   header h1 { font-size: 20px; margin: 0; }
   header small { color: var(--muted); }
-  main { display: grid; grid-template-columns: 1fr 1.2fr 1fr; gap: 22px; padding: 26px 32px; max-width: 1300px; margin: auto; }
+  main { display: grid; grid-template-columns: 1fr 1.25fr 1fr; gap: 22px; padding: 26px 32px; max-width: 1340px; margin: auto; align-items: start; }
   @media (max-width: 960px) { main { grid-template-columns: 1fr; } }
   .col h2 { font-size: 16px; display: flex; align-items: center; gap: 8px; margin: 0 0 14px; }
   .num { background: var(--orange); color: #fff; width: 24px; height: 24px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 13px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+  .sticky { position: sticky; top: 16px; }
   .drop { border: 2px dashed var(--line); border-radius: 12px; padding: 26px 12px; text-align: center; cursor: pointer; color: var(--muted); transition: .2s; }
   .drop:hover, .drop.over { border-color: var(--orange); color: var(--orange); background: #fff6f2; }
   .drop .plus { width: 36px; height: 36px; background: var(--orange); color: #fff; border-radius: 50%; display: inline-grid; place-items: center; font-size: 24px; margin-bottom: 6px; }
@@ -26,30 +27,44 @@
   .clip div { padding: 5px 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .clip .bar { position: absolute; bottom: 0; left: 0; height: 3px; background: var(--orange); }
   .clip button { position: absolute; top: 4px; left: 4px; border: 0; background: #000a; color: #fff; border-radius: 50%; width: 22px; height: 22px; cursor: pointer; }
-  .row { display: flex; align-items: center; justify-content: space-between; padding: 9px 2px; border-bottom: 1px solid #f4f0eb; font-size: 14px; }
-  .row:last-of-type { border-bottom: 0; }
-  .row .hint { color: var(--muted); font-size: 11px; display: block; }
-  .row.off-feature { opacity: .45; }
+  details { border: 1px solid var(--line); border-radius: 12px; margin-bottom: 10px; background: #fff; }
+  details > summary { cursor: pointer; padding: 12px 14px; font-weight: 700; font-size: 14px; list-style: none; display: flex; justify-content: space-between; }
+  details > summary::after { content: "▾"; color: var(--muted); }
+  details[open] > summary::after { content: "▴"; }
+  details > .body { padding: 0 14px 10px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 2px; border-top: 1px solid #f4f0eb; font-size: 14px; }
+  .row .hint, .hint { color: var(--muted); font-size: 11px; display: block; }
   .switch { position: relative; width: 38px; height: 22px; flex-shrink: 0; }
   .switch input { display: none; }
   .switch span { position: absolute; inset: 0; background: #ddd8d2; border-radius: 22px; cursor: pointer; transition: .2s; }
   .switch span::after { content: ""; position: absolute; width: 16px; height: 16px; top: 3px; right: 3px; background: #fff; border-radius: 50%; transition: .2s; }
   .switch input:checked + span { background: var(--orange); }
   .switch input:checked + span::after { right: 19px; }
-  .sub { padding: 8px 0 6px; display: none; }
+  .sub { padding: 4px 0 10px; display: none; }
   .sub.show { display: block; }
-  input[type=text], input[type=number], select, textarea { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: inherit; font-size: 13px; background: #fff; }
-  textarea { min-height: 64px; resize: vertical; }
-  label.small { font-size: 13px; display: block; margin: 12px 0 5px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  input[type=text], input[type=password], select, textarea { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: inherit; font-size: 13px; background: #fff; }
+  input[type=file] { font-size: 12px; max-width: 100%; }
+  textarea { min-height: 60px; resize: vertical; }
+  label.small { font-size: 12px; display: block; margin: 8px 0 4px; color: #55504b; }
+  .swatches { display: flex; gap: 6px; flex-wrap: wrap; }
+  .swatches label { width: 28px; height: 28px; border-radius: 50%; cursor: pointer; border: 2px solid #fff; box-shadow: 0 0 0 1px var(--line); }
+  .swatches input { display: none; }
+  .swatches input:checked + label { box-shadow: 0 0 0 2px var(--orange); }
+  .files { font-size: 12px; color: #2e7d4f; margin-top: 4px; }
   .go { width: 100%; background: var(--orange); color: #fff; border: 0; border-radius: 10px; padding: 14px; font-size: 16px; font-weight: 700; cursor: pointer; box-shadow: 0 4px 14px #e8501e44; }
   .go:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
   .progress { height: 8px; background: #f1ebe5; border-radius: 8px; overflow: hidden; margin: 14px 0 8px; }
   .progress div { height: 100%; width: 0; background: var(--orange); transition: width .4s; }
-  .log { font-size: 12px; color: #55504b; max-height: 240px; overflow: auto; line-height: 1.8; }
-  .result video { width: 100%; border-radius: 10px; margin-top: 10px; background: #000; max-height: 480px; }
-  .downloads a { display: block; margin-top: 8px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; text-decoration: none; color: inherit; font-size: 13px; }
+  .log { font-size: 12px; color: #55504b; max-height: 220px; overflow: auto; line-height: 1.8; }
+  .reel { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 12px; }
+  .reel h3 { font-size: 14px; margin: 0 0 6px; }
+  .reel video { width: 100%; border-radius: 10px; background: #000; max-height: 460px; }
+  .reel img { width: 90px; border-radius: 8px; float: left; margin-right: 8px; }
+  .downloads a { display: block; margin-top: 7px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 8px; text-decoration: none; color: inherit; font-size: 13px; }
   .downloads a:hover { border-color: var(--orange); color: var(--orange); }
-  .saved { color: #2e9d55; font-size: 12px; text-align: center; margin-top: 8px; }
+  .warn { font-size: 13px; margin-top: 8px; color: #c0392b; }
+  .saved { color: #2e9d55; font-size: 12px; text-align: center; margin-top: 8px; opacity: .4; }
 </style>
 </head>
 <body>
@@ -75,55 +90,147 @@
 
   <section class="col">
     <h2><span class="num">2</span> اختر التعديلات المطلوبة</h2>
-    <div class="card" id="options">
-      <div class="row"><div>حذف الإعادات والأخطاء<span class="hint">يحذف الجملة اللي أعدتها ويبقي آخر محاولة</span></div>
-        <label class="switch"><input type="checkbox" data-opt="remove_bad_takes" checked><span></span></label></div>
-      <div class="row"><div>حذف الكلمات الزائدة<span class="hint">امم، اه، um، uh…</span></div>
-        <label class="switch"><input type="checkbox" data-opt="remove_fillers" checked><span></span></label></div>
-      <div class="row"><div>قص الصمت والفراغات</div>
-        <label class="switch"><input type="checkbox" data-opt="cut_silences" checked><span></span></label></div>
-      <div class="row"><div>ترجمة متحركة على الشاشة<span class="hint">كلمات كبيرة بخلفية برتقالية + ملف SRT</span></div>
-        <label class="switch"><input type="checkbox" data-opt="captions" checked><span></span></label></div>
-      <div class="row"><div>زوم تلقائي بين اللقطات</div>
-        <label class="switch"><input type="checkbox" data-opt="zoom_cuts" checked><span></span></label></div>
-      <div class="row"><div>موسيقى خلفية<span class="hint">ارفع ملف موسيقى، ستوضع تحت صوتك تلقائياً</span></div>
-        <label class="switch"><input type="checkbox" data-opt="music" data-sub="musicSub"><span></span></label></div>
-      <div class="sub" id="musicSub">
-        <input type="file" id="musicPicker" accept="audio/*">
-        <div class="hint" id="musicName" style="font-size:12px;margin-top:4px"></div>
-      </div>
-      <div class="row"><div>صوت استوديو<span class="hint">إزالة الضوضاء + ضغط + توحيد مستوى الصوت</span></div>
-        <label class="switch"><input type="checkbox" data-opt="studio_sound" checked><span></span></label></div>
-      <div class="row"><div>تصحيح الألوان تلقائياً</div>
-        <label class="switch"><input type="checkbox" data-opt="color" checked><span></span></label></div>
-      <div class="row"><div>نص جذّاب في البداية (Hook)<span class="hint">أول 3 ثواني</span></div>
-        <label class="switch"><input type="checkbox" data-opt="text_hook" data-sub="hookSub"><span></span></label></div>
-      <div class="sub" id="hookSub"><input type="text" data-opt="hook_text" placeholder="اتركه فارغاً لاستخدام أول جملة تقولها"></div>
-      <div class="row off-feature"><div>B-roll ومؤثرات صوتية بالذكاء الاصطناعي<span class="hint">تحتاج خدمة AI مدفوعة، غير مفعّلة</span></div>
-        <label class="switch"><input type="checkbox" disabled><span></span></label></div>
 
-      <label class="small">مدة الفيديو المستهدفة (ثانية)</label>
-      <select data-opt="target_length">
-        <option value="0">تلقائي</option><option value="15">15</option><option value="30">30</option>
-        <option value="45">45</option><option value="60">60</option><option value="90">90</option>
-      </select>
-      <label class="small">لغة الكلام</label>
-      <select data-opt="language">
-        <option value="">اكتشاف تلقائي</option><option value="ar">العربية</option><option value="en">English</option>
-      </select>
-      <label class="small">ملاحظات إضافية للمونتير</label>
-      <textarea data-opt="notes" placeholder="مثلاً: خلّ أول 3 ثواني قوية قدر الإمكان"></textarea>
-      <div class="saved" id="saved">✓ تم الحفظ</div>
-    </div>
+    <details open>
+      <summary>✂️ القص والمونتاج</summary>
+      <div class="body">
+        <div class="row"><div>حذف الإعادات والأخطاء<span class="hint">يحذف الجملة اللي أعدتها ويبقي آخر محاولة</span></div>
+          <label class="switch"><input type="checkbox" data-opt="remove_bad_takes" checked><span></span></label></div>
+        <div class="row"><div>حذف الكلمات الزائدة<span class="hint">امم، اه، um، uh…</span></div>
+          <label class="switch"><input type="checkbox" data-opt="remove_fillers" checked><span></span></label></div>
+        <div class="row"><div>قص الصمت والفراغات</div>
+          <label class="switch"><input type="checkbox" data-opt="cut_silences" checked><span></span></label></div>
+        <div class="row"><div>زوم تلقائي بين اللقطات</div>
+          <label class="switch"><input type="checkbox" data-opt="zoom_cuts" checked><span></span></label></div>
+        <div class="row"><div>تقطيع الفيديو الطويل لعدة ريلز<span class="hint">فيديو 4 دقايق يصير عدة ريلز، يقص بين الجمل</span></div>
+          <label class="switch"><input type="checkbox" data-opt="split_reels" data-sub="splitSub"><span></span></label></div>
+        <div class="sub" id="splitSub">
+          <label class="small">طول كل ريل (ثانية)</label>
+          <select data-opt="reel_length"><option value="30">30</option><option value="45">45</option><option value="60" selected>60</option><option value="90">90</option></select>
+        </div>
+        <div class="grid2">
+          <div><label class="small">سرعة الكلام</label>
+            <select data-opt="speed"><option value="1">عادي</option><option value="1.1">أسرع شوي ×1.1</option><option value="1.2">أسرع ×1.2</option></select></div>
+          <div><label class="small">المدة القصوى (ثانية)</label>
+            <select data-opt="target_length"><option value="0">بدون حد</option><option value="15">15</option><option value="30">30</option>
+              <option value="45">45</option><option value="60">60</option><option value="90">90</option></select></div>
+        </div>
+      </div>
+    </details>
+
+    <details open>
+      <summary>💬 الترجمة والنصوص</summary>
+      <div class="body">
+        <div class="row"><div>ترجمة متحركة على الشاشة<span class="hint">كلامك مكتوب بخط كبير + ملف SRT</span></div>
+          <label class="switch"><input type="checkbox" data-opt="captions" data-sub="capSub" checked><span></span></label></div>
+        <div class="sub" id="capSub">
+          <label class="small">اللون</label>
+          <div class="swatches">
+            <input type="radio" name="cc" id="cc-orange" value="orange" data-opt="caption_color" checked><label for="cc-orange" style="background:#e8501e"></label>
+            <input type="radio" name="cc" id="cc-yellow" value="yellow" data-opt="caption_color"><label for="cc-yellow" style="background:#ffd60a"></label>
+            <input type="radio" name="cc" id="cc-red" value="red" data-opt="caption_color"><label for="cc-red" style="background:#e53935"></label>
+            <input type="radio" name="cc" id="cc-green" value="green" data-opt="caption_color"><label for="cc-green" style="background:#22a55b"></label>
+            <input type="radio" name="cc" id="cc-blue" value="blue" data-opt="caption_color"><label for="cc-blue" style="background:#1e88e5"></label>
+            <input type="radio" name="cc" id="cc-white" value="white" data-opt="caption_color"><label for="cc-white" style="background:#fff"></label>
+            <input type="radio" name="cc" id="cc-black" value="black" data-opt="caption_color"><label for="cc-black" style="background:#111"></label>
+          </div>
+          <div class="grid2">
+            <div><label class="small">الحجم</label>
+              <select data-opt="caption_size"><option value="small">صغير</option><option value="medium" selected>وسط</option><option value="large">كبير</option></select></div>
+            <div><label class="small">المكان</label>
+              <select data-opt="caption_position"><option value="lower" selected>تحت</option><option value="middle">وسط</option><option value="top">فوق</option></select></div>
+          </div>
+          <div class="row"><div>تلوين الكلمة اللي تنقال</div>
+            <label class="switch"><input type="checkbox" data-opt="highlight_word" checked><span></span></label></div>
+        </div>
+        <div class="row"><div>ترجمة إنجليزية تحت العربي<span class="hint">تاخذ وقت إضافي في التفريغ + ملف SRT إنجليزي</span></div>
+          <label class="switch"><input type="checkbox" data-opt="english_subs"><span></span></label></div>
+        <div class="row"><div>نص جذّاب في البداية (Hook)<span class="hint">أول 3 ثواني</span></div>
+          <label class="switch"><input type="checkbox" data-opt="text_hook" data-sub="hookSub"><span></span></label></div>
+        <div class="sub" id="hookSub"><input type="text" data-opt="hook_text" placeholder="اتركه فارغاً لاستخدام أول جملة تقولها"></div>
+        <label class="small">لغة الكلام</label>
+        <select data-opt="language"><option value="">اكتشاف تلقائي</option><option value="ar" selected>العربية</option><option value="en">English</option></select>
+      </div>
+    </details>
+
+    <details>
+      <summary>🎨 الشكل والهوية</summary>
+      <div class="body">
+        <label class="small">المقاس</label>
+        <select data-opt="aspect">
+          <option value="9:16">ريل / تيك توك / ستوري 9:16</option><option value="4:5">بوست إنستقرام 4:5</option>
+          <option value="1:1">مربع 1:1</option><option value="16:9">يوتيوب 16:9</option>
+        </select>
+        <div class="row"><div>شعارك على الفيديو</div>
+          <label class="switch"><input type="checkbox" data-opt="logo" data-sub="logoSub"><span></span></label></div>
+        <div class="sub" id="logoSub">
+          <input type="file" id="logoPicker" accept="image/*"><div class="files" id="logoName"></div>
+          <label class="small">مكان الشعار</label>
+          <select data-opt="logo_position"><option value="top-right">فوق يمين</option><option value="top-left">فوق يسار</option>
+            <option value="bottom-right">تحت يمين</option><option value="bottom-left">تحت يسار</option></select>
+        </div>
+        <div class="row"><div>بطاقة نهاية (3 ثواني)<span class="hint">تابعنا + رقمك أو حسابك + الشعار</span></div>
+          <label class="switch"><input type="checkbox" data-opt="end_card" data-sub="endSub"><span></span></label></div>
+        <div class="sub" id="endSub">
+          <label class="small">العنوان</label><input type="text" data-opt="end_card_title" value="تابعنا للمزيد">
+          <label class="small">رقم الواتساب أو الحساب</label><input type="text" data-opt="end_card_contact" placeholder="مثلاً: واتساب 05xxxxxxxx">
+        </div>
+        <div class="row"><div>صورة غلاف تلقائية<span class="hint">لقطة من الفيديو مع عنوان كبير</span></div>
+          <label class="switch"><input type="checkbox" data-opt="thumbnail" data-sub="thumbSub" checked><span></span></label></div>
+        <div class="sub" id="thumbSub"><input type="text" data-opt="thumbnail_text" placeholder="عنوان الغلاف (اتركه فارغ ويستخدم الـ Hook أو أول جملة)"></div>
+        <div class="row"><div>شريط تقدّم فوق الفيديو</div>
+          <label class="switch"><input type="checkbox" data-opt="progress_bar"><span></span></label></div>
+        <div class="row"><div>تصحيح الألوان تلقائياً</div>
+          <label class="switch"><input type="checkbox" data-opt="color" checked><span></span></label></div>
+      </div>
+    </details>
+
+    <details>
+      <summary>🎵 الصوت</summary>
+      <div class="body">
+        <div class="row"><div>صوت استوديو<span class="hint">إزالة الضوضاء والهواء + توحيد مستوى الصوت</span></div>
+          <label class="switch"><input type="checkbox" data-opt="studio_sound" checked><span></span></label></div>
+        <div class="row"><div>موسيقى خلفية<span class="hint">ارفع ملف موسيقى، ستوضع تحت صوتك تلقائياً</span></div>
+          <label class="switch"><input type="checkbox" data-opt="music" data-sub="musicSub"><span></span></label></div>
+        <div class="sub" id="musicSub"><input type="file" id="musicPicker" accept="audio/*"><div class="files" id="musicName"></div></div>
+        <div class="row"><div>مؤثر صوتي (ووش)<span class="hint">عند الزوم وعند لقطات B-roll</span></div>
+          <label class="switch"><input type="checkbox" data-opt="sfx"><span></span></label></div>
+      </div>
+    </details>
+
+    <details>
+      <summary>🎞️ لقطات B-roll</summary>
+      <div class="body">
+        <div class="row"><div>B-roll من ملفاتك<span class="hint">صور أو مقاطع (مثلاً من المزرعة) تتوزع داخل الفيديو</span></div>
+          <label class="switch"><input type="checkbox" data-opt="broll" data-sub="brollSub"><span></span></label></div>
+        <div class="sub" id="brollSub"><input type="file" id="brollPicker" accept="image/*,video/*" multiple><div class="files" id="brollName"></div></div>
+        <div class="row"><div>B-roll تلقائي من Pexels<span class="hint">لقطات مجانية تناسب كلامك، تحتاج مفتاح مجاني من pexels.com/api</span></div>
+          <label class="switch"><input type="checkbox" data-opt="pexels" data-sub="pexelsSub"><span></span></label></div>
+        <div class="sub" id="pexelsSub">
+          <label class="small">مفتاح Pexels API</label><input type="password" data-opt="pexels_key" placeholder="الصق المفتاح هنا">
+          <label class="small">كلمات البحث بالإنجليزي (اختياري، بينها فاصلة)</label>
+          <input type="text" data-opt="pexels_keywords" placeholder="palm trees, farm, irrigation" dir="ltr">
+          <span class="hint">إذا تركتها فاضية، يطلّعها من الترجمة الإنجليزية لكلامك</span>
+        </div>
+      </div>
+    </details>
+
+    <details>
+      <summary>📝 ملاحظات</summary>
+      <div class="body">
+        <textarea data-opt="notes" placeholder="ملاحظات للمونتير، مثلاً: خلّ أول 3 ثواني قوية قدر الإمكان"></textarea>
+      </div>
+    </details>
+    <div class="saved" id="saved">✓ الإعدادات تنحفظ تلقائياً</div>
   </section>
 
   <section class="col">
     <h2><span class="num">3</span> مونتاج بضغطة واحدة</h2>
-    <div class="card">
+    <div class="card sticky">
       <button class="go" id="go" disabled>✂️ ابدأ المونتاج</button>
       <div class="progress"><div id="bar"></div></div>
       <div class="log" id="log">أضف فيديو للبدء.</div>
-      <div class="result" id="result"></div>
+      <div id="result"></div>
     </div>
   </section>
 </main>
