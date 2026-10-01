@@ -18,6 +18,7 @@ from collections import Counter
 
 FPS = 30
 HERE = os.path.dirname(os.path.abspath(__file__))
+FACE_MODEL = os.path.join(HERE, "models", "face_detection_yunet_2023mar.onnx")
 FONT_FILE = os.path.join(HERE, "fonts", "Qatar2022Arabic-Bold.ttf")
 FONT_NAME = "Qatar2022 Arabic"
 
@@ -53,6 +54,7 @@ DEFAULT_OPTIONS = {
     "remove_fillers": True,
     "cut_silences": True,
     "zoom_cuts": True,
+    "auto_reframe": True,  # follow the speaker's face when cropping
     "speed": 1.0,
     "target_length": 0,  # seconds, 0 = auto
     "split_reels": False,
@@ -61,7 +63,7 @@ DEFAULT_OPTIONS = {
     "captions": True,
     "caption_color": "orange",
     "caption_size": "medium",
-    "caption_position": "lower",  # lower / middle / top
+    "caption_position": "auto",  # auto (avoid face/body) / lower / middle / top
     "highlight_word": True,
     "english_subs": False,
     "text_hook": False,
@@ -437,11 +439,12 @@ def dialogue(start, end, style, text, layer=0):
     return f"Dialogue: {layer},{ass_time(start)},{ass_time(end)},{style},,0,0,0,,{text}\n"
 
 
-def caption_events(chunks, opts):
+def caption_events(chunks, opts, place=None):
     text_c, _, hl_c, _ = PALETTES.get(opts["caption_color"], PALETTES["orange"])
-    pop = "{\\fscx85\\fscy85\\t(0,90,\\fscx100\\fscy100)}"
     lines = []
-    for c in chunks:
+    for n, c in enumerate(chunks):
+        pos = place[n] if place else ""
+        pop = pos + "{\\fscx85\\fscy85\\t(0,90,\\fscx100\\fscy100)}"
         if not opts["highlight_word"] or len(c["words"]) < 2:
             lines.append(dialogue(c["start"], c["end"], "Caption", pop + ass_escape(c["text"])))
             continue
@@ -452,7 +455,7 @@ def caption_events(chunks, opts):
                 continue
             # every word gets its own colour tag: libass lays out multi-word Arabic runs left-to-right
             parts = [f"{{\\c{hl_c if j == i else text_c}}}{ass_escape(x['text'])}" for j, x in enumerate(c["words"])]
-            lines.append(dialogue(start, end, "Caption", (pop if i == 0 else "") + " ".join(parts)))
+            lines.append(dialogue(start, end, "Caption", (pop if i == 0 else pos) + " ".join(parts)))
     return lines
 
 
@@ -504,14 +507,183 @@ def fetch_pexels(keywords, key, aspect, out_dir, log):
 
 # ---------------------------------------------------------------- rendering
 
-def video_filter(opts, w, h, zoom):
-    vf = [f"scale={w}:{h}:force_original_aspect_ratio=increase", f"crop={w}:{h}"]
-    if zoom:
-        vf += [f"scale={int(w * 1.15) // 2 * 2}:{int(h * 1.15) // 2 * 2}", f"crop={w}:{h}:(iw-{w})/2:(ih-{h})/3"]
+def video_filter(opts, crop):
+    vf = list(crop)
     if opts["color"]:
         vf.append("eq=contrast=1.06:saturation=1.18:brightness=0.015:gamma=0.98")
     vf += [f"fps={FPS}", "setsar=1", "format=yuv420p"]
     return ",".join(vf)
+
+
+# ---------------------------------------------------------------- face tracking
+
+def track_faces(path, log, fps=2.0):
+    """Face positions sampled `fps` times a second, normalised to the displayed frame; None if unavailable."""
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        log("⚠️ تتبّع الوجه يحتاج OpenCV: pip install opencv-python-headless")
+        return None
+    try:
+        cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
+    except AttributeError:
+        pass
+    # exact frames every 1/fps s (the fps filter picks the nearest frame, up to half a step late)
+    vf = f"select='isnan(prev_selected_t)+gte(t-prev_selected_t,{1 / fps - 0.001:.3f})',scale=480:-2"
+    first = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-vf", vf, "-frames:v", "1",
+                            "-f", "image2pipe", "-vcodec", "png", "-"], capture_output=True).stdout
+    img = cv2.imdecode(np.frombuffer(first, np.uint8), cv2.IMREAD_COLOR) if first else None
+    if img is None:
+        return None
+    fh, fw = img.shape[:2]
+    try:
+        detector = cv2.FaceDetectorYN.create(FACE_MODEL, "", (fw, fh), 0.6)
+    except Exception as exc:  # very old OpenCV without YuNet, or model missing
+        log(f"⚠️ تعذّر تشغيل كاشف الوجه: {str(exc)[:120]}")
+        return None
+
+    proc = subprocess.Popen(["ffmpeg", "-v", "error", "-i", path, "-vf", vf, "-fps_mode", "passthrough", "-pix_fmt", "bgr24",
+                             "-f", "rawvideo", "-"], stdout=subprocess.PIPE)
+    size, samples, i = fw * fh * 3, [], 0
+    while True:
+        buf = proc.stdout.read(size)
+        if len(buf) < size:
+            break
+        frame = np.frombuffer(buf, np.uint8).reshape(fh, fw, 3)
+        _, faces = detector.detect(frame)
+        box = None
+        if faces is not None and len(faces):
+            x, y, w, h = max(faces, key=lambda f: f[2] * f[3])[:4]
+            box = ((x + w / 2) / fw, (y + h / 2) / fh, w / fw, h / fh)
+        samples.append((i / fps, box))
+        i += 1
+    proc.wait()
+    found = sum(1 for _, b in samples if b)
+    if not found:
+        return None
+    return {"aspect": fw / fh, "samples": samples, "found": found / max(1, len(samples))}
+
+
+def face_keyframes(track, start, end, step=0.5):
+    """Smoothed face boxes for a segment: nearest detection fills gaps, then a moving average and a dead zone."""
+    valid = [(t, b) for t, b in track["samples"] if b]
+    raw, t = [], start
+    while t <= end + 1e-6:
+        raw.append((t - start, min(valid, key=lambda v: abs(v[0] - t))[1]))
+        t += step
+    # a jump in position or size is a shot change: never average across it
+    shot, shots = 0, []
+    for i, (_, b) in enumerate(raw):
+        if i and (abs(b[0] - raw[i - 1][1][0]) > 0.15 or abs(b[1] - raw[i - 1][1][1]) > 0.15
+                  or max(b[3], raw[i - 1][1][3]) > 1.6 * min(b[3], raw[i - 1][1][3])):
+            shot += 1
+        shots.append(shot)
+    out, held = [], None
+    for i in range(len(raw)):
+        win = [b for j, (_, b) in enumerate(raw[max(0, i - 2):i + 3], max(0, i - 2)) if shots[j] == shots[i]]
+        avg = tuple(sum(b[k] for b in win) / len(win) for k in range(4))
+        if held is None or (i and shots[i] != shots[i - 1]) \
+                or abs(avg[0] - held[0]) > 0.04 or abs(avg[1] - held[1]) > 0.06:
+            held = avg
+        out.append((raw[i][0], held))
+    return out
+
+
+def piecewise(points, ramp=0.6):
+    """ffmpeg expression in t: hold each value, easing linearly into the next over `ramp` seconds."""
+    expr = f"{points[-1][1]:.4f}"
+    for (t0, v0), (t1, v1) in reversed(list(zip(points, points[1:]))):
+        a = max(t0, t1 - ramp)
+        expr = (f"if(lt(t,{a:.2f}),{v0:.4f},if(lt(t,{t1:.2f}),"
+                f"{v0:.4f}+({v1 - v0:.4f})*(t-{a:.2f})/{t1 - a:.2f},{expr}))")
+    return expr
+
+
+def reframe(track, seg, w, h, zoom, follow):
+    """Crop filters for one segment plus where the face lands in the output frame over time."""
+    z = 1.15 if zoom else 1.0
+    scale = f"scale={int(w * z) // 2 * 2}:{int(h * z) // 2 * 2}:force_original_aspect_ratio=increase"
+    if not track:
+        y = f"(ih-{h})/3" if zoom else f"(ih-{h})/2"
+        return [scale, f"crop={w}:{h}:(iw-{w})/2:{y}"], []
+    r = track["aspect"]
+    sw, sh = (h * z * r, h * z) if r > w / h else (w * z, w * z / r)
+    kfs = face_keyframes(track, seg["start"], seg["end"])
+    if follow:
+        cy = sorted(b[1] for _, b in kfs)[len(kfs) // 2]
+        points = [kfs[0][:1] + (kfs[0][1][0],)]
+        points += [(t, b[0]) for (t, b), (_, prev) in zip(kfs[1:], kfs) if b[0] != prev[0]]
+        x_expr = f"clip(({piecewise(points)})*iw-ow/2,0,iw-ow)"
+        y_expr = f"clip({cy:.4f}*ih-oh*0.4,0,ih-oh)"
+        x_of = lambda b: min(max(b[0] * sw - w / 2, 0), sw - w)
+        y_off = min(max(cy * sh - h * 0.4, 0), sh - h)
+    else:
+        x_expr, y_expr = f"(iw-{w})/2", (f"(ih-{h})/3" if zoom else f"(ih-{h})/2")
+        x_of = lambda b: (sw - w) / 2
+        y_off = (sh - h) / (3 if zoom else 2)
+    faces = [(t, (b[0] * sw - x_of(b), b[1] * sh - y_off, b[2] * sw, b[3] * sh)) for t, b in kfs]
+    return [scale, f"crop={w}:{h}:x='{x_expr}':y='{y_expr}'"], faces
+
+
+# ---------------------------------------------------------------- smart text placement
+
+ZONES = {"top": 0.17, "upper": 0.36, "lower": 0.66, "bottom": 0.78}  # bottom stays clear of the reels UI
+
+
+def faces_in(faces, start, end):
+    boxes = [b for t, b in faces if start - 0.15 <= t <= end + 0.15]
+    if not boxes and faces:
+        boxes = [min(faces, key=lambda f: abs(f[0] - (start + end) / 2))[1]]
+    return boxes
+
+
+def overlaps(y, half_h, half_w, boxes, w, h, body=True):
+    """Does a text block centred at (w/2, y) cover a face (or, with body=True, the torso under it)?"""
+    left, right = w / 2 - half_w, w / 2 + half_w
+    for fx, fy, fw, fh in boxes:
+        pad = 0.035 * h
+        if y + half_h > fy - fh / 2 - pad and y - half_h < fy + fh / 2 + pad \
+                and right > fx - fw / 2 - pad and left < fx + fw / 2 + pad:
+            return True
+        if body and y + half_h > fy + fh / 2 and right > fx - 1.4 * fw and left < fx + 1.4 * fw:
+            return True
+    return False
+
+
+def text_block(text, size, w, wrap=0.84):
+    width = len(text) * size * 0.5
+    lines = max(1, -(-int(width) // int(w * wrap)))
+    return lines * size * 0.72, min(w * wrap, width) / 2  # half height, half width
+
+
+def choose_zone(boxes, half_h, half_w, w, h, order, prev=None, avoid=()):
+    def free(name, body, face=True):
+        y = ZONES[name] * h
+        clash = any(abs(y - ay) < half_h + ah for ay, ah in avoid)
+        return not clash and not (face and overlaps(y, half_h, half_w, boxes, w, h, body))
+    if prev and free(prev, False):
+        return prev
+    # clear of face and torso > clear of face > clear of the face shown longest (text spanning a shot cut)
+    # > at least not on top of other text
+    for body, face in ((True, True), (False, True)):
+        for name in order:
+            if free(name, body, face):
+                return name
+    if len(boxes) > 1:
+        main = max(boxes, key=lambda b: sum(abs(o[1] - b[1]) < 0.1 * h for o in boxes))
+        for name in order:
+            y = ZONES[name] * h
+            if not any(abs(y - ay) < half_h + ah for ay, ah in avoid) and not overlaps(y, half_h, half_w, [main], w, h, False):
+                return name
+    for name in order:
+        if free(name, False, False):
+            return name
+    return order[0]
+
+
+def at(x, y):
+    return f"{{\\an5\\pos({int(x)},{int(y)})}}"
 
 
 ENCODE = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "19", "-pix_fmt", "yuv420p",
@@ -562,14 +734,14 @@ def plan_broll(brolls, duration, reel_no):
     return placed
 
 
-def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, log, progress):
+def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, tracks, log, progress):
     w, h = ASPECTS.get(opts["aspect"], ASPECTS["9:16"])
     _, _, _, box_hex = PALETTES.get(opts["caption_color"], PALETTES["orange"])
     parts_dir = os.path.join(job_dir, f"{prefix}_parts")
     os.makedirs(parts_dir, exist_ok=True)
 
     # 1. cut parts
-    listing, boundaries, offset = [], [], 0.0
+    listing, boundaries, faces, offset = [], [], [], 0.0
     for n, seg in enumerate(segments):
         zoom = opts["zoom_cuts"] and n % 2 == 1
         if zoom and n:
@@ -577,7 +749,9 @@ def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, log, 
         cmd = ["ffmpeg", "-y", "-v", "error", "-ss", str(seg["start"]), "-t", str(seg_len(seg)), "-i", seg["file"]]
         if not seg["has_audio"]:
             cmd += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-shortest"]
-        cmd += ["-vf", video_filter(opts, w, h, zoom), "-af", "aresample=48000,aformat=channel_layouts=stereo",
+        crop, seg_faces = reframe(tracks.get(seg["file"]), seg, w, h, zoom, opts["auto_reframe"])
+        faces += [(offset + t, b) for t, b in seg_faces]
+        cmd += ["-vf", video_filter(opts, crop), "-af", "aresample=48000,aformat=channel_layouts=stereo",
                 *ENCODE, os.path.join(parts_dir, f"{n:04d}.mp4")]
         run(cmd)
         listing.append(f"file '{prefix}_parts/{n:04d}.mp4'")  # relative: avoids Windows path issues
@@ -605,13 +779,44 @@ def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, log, 
     if opts["text_hook"]:
         hook = opts["hook_text"].strip() or " ".join(w["text"] for w in words[:6])
     has_ass = bool(chunks or en_items or hook)
+    auto = opts["caption_position"] == "auto" and bool(faces)
+    k = min(w, h) / 1080
+    cap_size = CAPTION_SIZES.get(opts["caption_size"], 92) * k
+    place, en_place, hook_place, cap_spots = None, [], "", []
+    if auto:
+        # captions: a zone clear of the face (and torso if possible), sticking with the last zone while it stays clear
+        place, prev = [], None
+        for c in chunks:
+            hh, hw = text_block(c["text"], cap_size, w)
+            prev = choose_zone(faces_in(faces, c["start"], c["end"]), hh + 14 * k, hw, w, h,
+                               ["lower", "upper", "top", "bottom"], prev)
+            cap_spots.append((c["start"], c["end"], ZONES[prev] * h, hh + 14 * k))
+            place.append(at(w / 2, ZONES[prev] * h))
+        # english: just under the caption on screen at that moment, or above it if that covers the face
+        en_size = cap_size * 0.58
+        for e in en_items:
+            hh, hw = text_block(e["text"], en_size, w, 0.8)
+            mid = (e["start"] + e["end"]) / 2
+            cy, ch = next(((y, ch) for s0, e0, y, ch in cap_spots if s0 <= mid <= e0 + 0.5), (ZONES["lower"] * h, cap_size))
+            boxes = faces_in(faces, e["start"], e["end"])
+            below, above = cy + ch + 12 * k + hh, cy - ch - 12 * k - hh
+            y = below if below + hh < 0.93 * h and not overlaps(below, hh, hw, boxes, w, h, False) else above
+            if overlaps(y, hh, hw, boxes, w, h, False) and not overlaps(below, hh, hw, boxes, w, h, False):
+                y = below
+            en_place.append(at(w / 2, y))
+        if hook:
+            hh, hw = text_block(hook, 84 * k, w)
+            busy = [(y, ch) for s0, _, y, ch in cap_spots if s0 < 3.0]
+            zone = choose_zone(faces_in(faces, 0, 3.0), hh + 22 * k, hw, w, h, ["top", "upper", "bottom"], avoid=busy)
+            hook_place = at(w / 2, ZONES[zone] * h)
     if has_ass:
         with open(os.path.join(job_dir, f"{prefix}.ass"), "w", encoding="utf-8") as f:
             f.write(ass_header(w, h, opts))
-            f.writelines(caption_events(chunks, opts))
-            f.writelines(dialogue(e["start"], e["end"], "English", ass_escape(e["text"]), 1) for e in en_items)
+            f.writelines(caption_events(chunks, opts, place))
+            f.writelines(dialogue(e["start"], e["end"], "English", (en_place[i] if en_place else "")
+                                  + ass_escape(e["text"]), 1) for i, e in enumerate(en_items))
             if hook:
-                f.write(dialogue(0, min(3.0, content), "Hook", "{\\fad(0,250)}" + ass_escape(hook), 2))
+                f.write(dialogue(0, min(3.0, content), "Hook", hook_place + "{\\fad(0,250)}" + ass_escape(hook), 2))
     if chunks:
         write_srt(os.path.join(job_dir, f"{prefix}.srt"), chunks)
     if en_items:
@@ -625,7 +830,13 @@ def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, log, 
         if title:
             with open(os.path.join(job_dir, f"{prefix}_thumb.ass"), "w", encoding="utf-8") as f:
                 f.write(ass_header(w, h, opts))
-                f.write(dialogue(0, 36000, "Thumb", ass_escape(title)))
+                pos = ""
+                if faces:
+                    hh, hw = text_block(title, 128 * k, w, 0.87)
+                    zone = choose_zone(faces_in(faces, 0, min(12.0, content)), hh + 26 * k, hw, w, h,
+                                       ["bottom", "top", "upper", "lower"])
+                    pos = at(w / 2, ZONES[zone] * h)
+                f.write(dialogue(0, 36000, "Thumb", pos + ass_escape(title)))
             vf += f",ass={prefix}_thumb.ass:fontsdir=fonts"
         thumb = f"{prefix}_thumb.jpg"
         run(["ffmpeg", "-y", "-v", "error", "-ss", "0.5", "-t", str(max(1.0, min(12.0, content - 0.5))),
@@ -794,6 +1005,16 @@ def process(job_dir, inputs, options, assets=None, log=print):
             else:
                 emit("⚠️ ما قدرت أطلع كلمات بحث لـ Pexels، اكتبها بنفسك بالإنجليزي")
 
+    tracks = {}
+    if opts["auto_reframe"] or opts["caption_position"] == "auto":
+        for path in inputs:
+            emit(f"تتبّع الوجه في {os.path.basename(path)}...")
+            tracks[path] = track_faces(path, emit)
+            if tracks[path]:
+                emit(f"  الوجه ظاهر في {tracks[path]['found'] * 100:.0f}% من الفيديو")
+            else:
+                emit("  ما لقيت وجه، بيكون القص من النص والكتابة في مكانها العادي")
+
     reels = split_into_reels(segments, opts["reel_length"]) if opts["split_reels"] else [segments]
     emit(f"الخطة: {len(segments)} لقطة، {total_in:.1f}ث ← {total_out:.1f}ث"
          + (f"، {len(reels)} ريلز" if len(reels) > 1 else ""), 0.3)
@@ -807,7 +1028,7 @@ def process(job_dir, inputs, options, assets=None, log=print):
             label = f"[ريل {k + 1}/{len(reels)}] " if len(reels) > 1 else ""
             emit(label + msg, base + 0.68 * frac / len(reels))
 
-        results.append(render_reel(job_dir, prefix, k, reel, english, opts, assets, emit, progress))
+        results.append(render_reel(job_dir, prefix, k, reel, english, opts, assets, tracks, emit, progress))
 
     safe_opts = {k: v for k, v in opts.items() if k != "pexels_key"}
     result = {

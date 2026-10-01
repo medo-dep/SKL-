@@ -4,6 +4,7 @@ const assets = { music: null, logo: null, broll: [] };
 
 const STORE = "raw-to-reel-options";
 const saved = JSON.parse(localStorage.getItem(STORE) || "{}");
+if (!("auto_reframe" in saved)) delete saved.caption_position; // settings saved before smart placement existed
 
 document.querySelectorAll("[data-opt]").forEach((el) => {
   const key = el.dataset.opt;

@@ -100,6 +100,8 @@
           <label class="switch"><input type="checkbox" data-opt="remove_fillers" checked><span></span></label></div>
         <div class="row"><div>قص الصمت والفراغات</div>
           <label class="switch"><input type="checkbox" data-opt="cut_silences" checked><span></span></label></div>
+        <div class="row"><div>تتبّع الوجه وتوسيط الشخص<span class="hint">القص يلحق وجهك بدل ما يقص من النص</span></div>
+          <label class="switch"><input type="checkbox" data-opt="auto_reframe" checked><span></span></label></div>
         <div class="row"><div>زوم تلقائي بين اللقطات</div>
           <label class="switch"><input type="checkbox" data-opt="zoom_cuts" checked><span></span></label></div>
         <div class="row"><div>تقطيع الفيديو الطويل لعدة ريلز<span class="hint">فيديو 4 دقايق يصير عدة ريلز، يقص بين الجمل</span></div>
@@ -138,7 +140,7 @@
             <div><label class="small">الحجم</label>
               <select data-opt="caption_size"><option value="small">صغير</option><option value="medium" selected>وسط</option><option value="large">كبير</option></select></div>
             <div><label class="small">المكان</label>
-              <select data-opt="caption_position"><option value="lower" selected>تحت</option><option value="middle">وسط</option><option value="top">فوق</option></select></div>
+              <select data-opt="caption_position"><option value="auto" selected>تلقائي (بعيد عن الوجه)</option><option value="lower">تحت</option><option value="middle">وسط</option><option value="top">فوق</option></select></div>
           </div>
           <div class="row"><div>تلوين الكلمة اللي تنقال</div>
             <label class="switch"><input type="checkbox" data-opt="highlight_word" checked><span></span></label></div>

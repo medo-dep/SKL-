@@ -8,6 +8,7 @@ description: Open the Raw-to-Reel one-click video editor (local web page in Chro
 1. Make sure `ffmpeg` is installed (`ffmpeg -version`). If not: macOS `brew install ffmpeg`, Windows `winget install ffmpeg`.
 2. For captions / filler-word / bad-take removal, make sure Whisper is installed:
    `python3 -c "import faster_whisper"` — if it fails, run `pip install faster-whisper`.
+   For face tracking (auto reframe + captions placed away from the face): `python3 -c "import cv2"`, else `pip install opencv-python-headless`.
 3. Start the server in the background from the repo root:
    `python3 raw-to-reel/server.py` (on Windows: `python raw-to-reel\server.py`, or double-click `start-windows.bat`)
    It opens http://127.0.0.1:4680 in the default browser (Chrome). Tell the user to pick their video(s), toggle the edits, and click "ابدأ المونتاج".
