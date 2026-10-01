@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Raw to Reel — مونتاج بضغطة واحدة</title>
+<style>
+  :root { --orange: #e8501e; --bg: #faf8f5; --card: #fff; --line: #ece7e1; --muted: #8a8580; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, "Segoe UI", Tahoma, sans-serif; background: var(--bg); color: #1d1b19; }
+  header { padding: 22px 32px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); background: #fff; }
+  header .logo { color: var(--orange); font-size: 26px; }
+  header h1 { font-size: 20px; margin: 0; }
+  header small { color: var(--muted); }
+  main { display: grid; grid-template-columns: 1fr 1.2fr 1fr; gap: 22px; padding: 26px 32px; max-width: 1300px; margin: auto; }
+  @media (max-width: 960px) { main { grid-template-columns: 1fr; } }
+  .col h2 { font-size: 16px; display: flex; align-items: center; gap: 8px; margin: 0 0 14px; }
+  .num { background: var(--orange); color: #fff; width: 24px; height: 24px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 13px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+  .drop { border: 2px dashed var(--line); border-radius: 12px; padding: 26px 12px; text-align: center; cursor: pointer; color: var(--muted); transition: .2s; }
+  .drop:hover, .drop.over { border-color: var(--orange); color: var(--orange); background: #fff6f2; }
+  .drop .plus { width: 36px; height: 36px; background: var(--orange); color: #fff; border-radius: 50%; display: inline-grid; place-items: center; font-size: 24px; margin-bottom: 6px; }
+  .clips { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 12px; }
+  .clip { border: 2px solid var(--orange); border-radius: 10px; overflow: hidden; font-size: 11px; position: relative; }
+  .clip video { width: 100%; height: 110px; object-fit: cover; display: block; background: #000; }
+  .clip div { padding: 5px 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .clip .bar { position: absolute; bottom: 0; left: 0; height: 3px; background: var(--orange); }
+  .clip button { position: absolute; top: 4px; left: 4px; border: 0; background: #000a; color: #fff; border-radius: 50%; width: 22px; height: 22px; cursor: pointer; }
+  .row { display: flex; align-items: center; justify-content: space-between; padding: 9px 2px; border-bottom: 1px solid #f4f0eb; font-size: 14px; }
+  .row:last-of-type { border-bottom: 0; }
+  .row .hint { color: var(--muted); font-size: 11px; display: block; }
+  .row.off-feature { opacity: .45; }
+  .switch { position: relative; width: 38px; height: 22px; flex-shrink: 0; }
+  .switch input { display: none; }
+  .switch span { position: absolute; inset: 0; background: #ddd8d2; border-radius: 22px; cursor: pointer; transition: .2s; }
+  .switch span::after { content: ""; position: absolute; width: 16px; height: 16px; top: 3px; right: 3px; background: #fff; border-radius: 50%; transition: .2s; }
+  .switch input:checked + span { background: var(--orange); }
+  .switch input:checked + span::after { right: 19px; }
+  .sub { padding: 8px 0 6px; display: none; }
+  .sub.show { display: block; }
+  input[type=text], input[type=number], select, textarea { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: inherit; font-size: 13px; background: #fff; }
+  textarea { min-height: 64px; resize: vertical; }
+  label.small { font-size: 13px; display: block; margin: 12px 0 5px; }
+  .go { width: 100%; background: var(--orange); color: #fff; border: 0; border-radius: 10px; padding: 14px; font-size: 16px; font-weight: 700; cursor: pointer; box-shadow: 0 4px 14px #e8501e44; }
+  .go:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
+  .progress { height: 8px; background: #f1ebe5; border-radius: 8px; overflow: hidden; margin: 14px 0 8px; }
+  .progress div { height: 100%; width: 0; background: var(--orange); transition: width .4s; }
+  .log { font-size: 12px; color: #55504b; max-height: 240px; overflow: auto; line-height: 1.8; }
+  .result video { width: 100%; border-radius: 10px; margin-top: 10px; background: #000; max-height: 480px; }
+  .downloads a { display: block; margin-top: 8px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; text-decoration: none; color: inherit; font-size: 13px; }
+  .downloads a:hover { border-color: var(--orange); color: var(--orange); }
+  .saved { color: #2e9d55; font-size: 12px; text-align: center; margin-top: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">✳</span>
+  <h1>Raw to Reel</h1>
+  <small>— حوّل الفيديو الخام إلى ريل جاهز بضغطة واحدة</small>
+</header>
+
+<main>
+  <section class="col">
+    <h2><span class="num">1</span> اختر الفيديو (أو الفيديوهات)</h2>
+    <div class="card">
+      <div class="drop" id="drop">
+        <div class="plus">+</div>
+        <div><b>إضافة فيديو</b></div>
+        <div style="font-size:12px">اسحب الملفات هنا أو اضغط للاختيار</div>
+      </div>
+      <input type="file" id="picker" accept="video/*" multiple hidden>
+      <div class="clips" id="clips"></div>
+    </div>
+  </section>
+
+  <section class="col">
+    <h2><span class="num">2</span> اختر التعديلات المطلوبة</h2>
+    <div class="card" id="options">
+      <div class="row"><div>حذف الإعادات والأخطاء<span class="hint">يحذف الجملة اللي أعدتها ويبقي آخر محاولة</span></div>
+        <label class="switch"><input type="checkbox" data-opt="remove_bad_takes" checked><span></span></label></div>
+      <div class="row"><div>حذف الكلمات الزائدة<span class="hint">امم، اه، um، uh…</span></div>
+        <label class="switch"><input type="checkbox" data-opt="remove_fillers" checked><span></span></label></div>
+      <div class="row"><div>قص الصمت والفراغات</div>
+        <label class="switch"><input type="checkbox" data-opt="cut_silences" checked><span></span></label></div>
+      <div class="row"><div>ترجمة متحركة على الشاشة<span class="hint">كلمات كبيرة بخلفية برتقالية + ملف SRT</span></div>
+        <label class="switch"><input type="checkbox" data-opt="captions" checked><span></span></label></div>
+      <div class="row"><div>زوم تلقائي بين اللقطات</div>
+        <label class="switch"><input type="checkbox" data-opt="zoom_cuts" checked><span></span></label></div>
+      <div class="row"><div>موسيقى خلفية<span class="hint">ارفع ملف موسيقى، ستوضع تحت صوتك تلقائياً</span></div>
+        <label class="switch"><input type="checkbox" data-opt="music" data-sub="musicSub"><span></span></label></div>
+      <div class="sub" id="musicSub">
+        <input type="file" id="musicPicker" accept="audio/*">
+        <div class="hint" id="musicName" style="font-size:12px;margin-top:4px"></div>
+      </div>
+      <div class="row"><div>صوت استوديو<span class="hint">إزالة الضوضاء + ضغط + توحيد مستوى الصوت</span></div>
+        <label class="switch"><input type="checkbox" data-opt="studio_sound" checked><span></span></label></div>
+      <div class="row"><div>تصحيح الألوان تلقائياً</div>
+        <label class="switch"><input type="checkbox" data-opt="color" checked><span></span></label></div>
+      <div class="row"><div>نص جذّاب في البداية (Hook)<span class="hint">أول 3 ثواني</span></div>
+        <label class="switch"><input type="checkbox" data-opt="text_hook" data-sub="hookSub"><span></span></label></div>
+      <div class="sub" id="hookSub"><input type="text" data-opt="hook_text" placeholder="اتركه فارغاً لاستخدام أول جملة تقولها"></div>
+      <div class="row off-feature"><div>B-roll ومؤثرات صوتية بالذكاء الاصطناعي<span class="hint">تحتاج خدمة AI مدفوعة، غير مفعّلة</span></div>
+        <label class="switch"><input type="checkbox" disabled><span></span></label></div>
+
+      <label class="small">مدة الفيديو المستهدفة (ثانية)</label>
+      <select data-opt="target_length">
+        <option value="0">تلقائي</option><option value="15">15</option><option value="30">30</option>
+        <option value="45">45</option><option value="60">60</option><option value="90">90</option>
+      </select>
+      <label class="small">لغة الكلام</label>
+      <select data-opt="language">
+        <option value="">اكتشاف تلقائي</option><option value="ar">العربية</option><option value="en">English</option>
+      </select>
+      <label class="small">ملاحظات إضافية للمونتير</label>
+      <textarea data-opt="notes" placeholder="مثلاً: خلّ أول 3 ثواني قوية قدر الإمكان"></textarea>
+      <div class="saved" id="saved">✓ تم الحفظ</div>
+    </div>
+  </section>
+
+  <section class="col">
+    <h2><span class="num">3</span> مونتاج بضغطة واحدة</h2>
+    <div class="card">
+      <button class="go" id="go" disabled>✂️ ابدأ المونتاج</button>
+      <div class="progress"><div id="bar"></div></div>
+      <div class="log" id="log">أضف فيديو للبدء.</div>
+      <div class="result" id="result"></div>
+    </div>
+  </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>
