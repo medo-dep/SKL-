@@ -97,6 +97,17 @@ def transcribe(path, model_name, language, log):
         return None
 
 
+def load_audio(path, sr=16000):
+    """Decode to 16 kHz mono float32 with ffmpeg (bypasses PyAV, whose API changed under faster-whisper)."""
+    import numpy as np
+
+    out = subprocess.run(
+        ["ffmpeg", "-nostdin", "-v", "error", "-i", path, "-f", "s16le", "-ac", "1", "-ar", str(sr), "-"],
+        capture_output=True, check=True,
+    ).stdout
+    return np.frombuffer(out, np.int16).astype(np.float32) / 32768.0
+
+
 def _transcribe(path, model_name, lang, log):
     try:
         from faster_whisper import WhisperModel
@@ -105,13 +116,14 @@ def _transcribe(path, model_name, lang, log):
     if WhisperModel:
         def run_on(device):
             model = WhisperModel(model_name, device=device, compute_type="int8")
-            segments, _ = model.transcribe(path, language=lang, word_timestamps=True)
+            segments, _ = model.transcribe(audio, language=lang, word_timestamps=True)
             return [
                 {"start": w.start, "end": w.end, "text": w.word.strip()}
                 for seg in segments for w in (seg.words or [])
             ]
 
         log(f"تفريغ الصوت بـ faster-whisper ({model_name})... أول مرة ينزّل النموذج وياخذ وقت")
+        audio = load_audio(path)
         try:
             return run_on("auto")
         except Exception as exc:  # usually missing CUDA DLLs (cublas/cudnn) on NVIDIA laptops
@@ -122,7 +134,7 @@ def _transcribe(path, model_name, lang, log):
 
         log(f"تفريغ الصوت بـ whisper ({model_name})...")
         model = whisper.load_model(model_name)
-        result = model.transcribe(path, language=lang, word_timestamps=True)
+        result = model.transcribe(load_audio(path), language=lang, word_timestamps=True)
         return [
             {"start": w["start"], "end": w["end"], "text": w["word"].strip()}
             for seg in result["segments"] for w in seg.get("words", [])
