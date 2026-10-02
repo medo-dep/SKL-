@@ -1,0 +1,12 @@
+{"keywords":["النخيل","الشمس"],
+ "scenes":[
+  {"start":0,"end":3,"graphic":{"type":"timeline","unit":"سنوات","ticks":[0,2,7,10],"steps":[{"t":0.8,"value":2},{"t":2,"value":7}]}},
+  {"start":3,"end":5,"graphic":{"type":"month_tabs","labels":["رجب","شعبان","رمضان"],"steps":[{"t":3,"active":0,"below":"شهر الزرع"},{"t":4,"active":2,"above":"شهر القرآن"}]}},
+  {"start":5,"end":7.5,"graphic":{"type":"checklist","title":"برنامجي اليومي","items":[{"text":"ورد القرآن كل يوم","t":5.3},{"text":"صلاة الضحى","t":6},{"text":"صدقة ولو قليلة","t":6.6}]}},
+  {"start":7.5,"end":9.5,"graphic":{"type":"pie_clock","slices":[{"label":"الصحبة","t":7.7,"share":0.3},{"label":"التلفون","t":8.4,"share":0.25},{"label":"الأكل","t":9,"share":0.2}]}},
+  {"start":9.5,"end":11,"frame":"small","graphic":{"type":"compare_bars","bars":[{"label":"الأكل","steps":[{"t":9.7,"value":0.6},{"t":10.3,"value":0.95,"color":"red"}]},{"label":"النشاط","color":"white","steps":[{"t":9.9,"value":0.3}]}]}},
+  {"start":11,"end":12.5,"graphic":{"type":"title_strip","text":"البركة"}},
+  {"start":12.5,"end":14,"graphic":{"type":"number_circles","values":["١٣","١٤","١٥"],"fill_times":[12.8,13.2,13.6]}},
+  {"start":14,"end":15.5,"graphic":{"type":"steps","count":6,"steps":[{"t":14.3,"step":2},{"t":15,"step":5}]}},
+  {"start":15.5,"end":18.1,"frame":"hidden","bg":"paper","graphic":{"type":"quote","lines":[{"text":"قل لي من تصاحب","t":15.6},{"text":"أقول لك من أنت","t":16.4,"color":"gold"}],"arrow":true}}
+ ]}

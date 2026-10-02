@@ -111,3 +111,17 @@ The face detector model in `models/` is YuNet from opencv_zoo (MIT, see `models/
 الإيموجي من [Twemoji](https://github.com/jdecked/twemoji) (CC-BY 4.0، انظر `assets/emoji/LICENSE-GRAPHICS`).
 
 الخطوط من [Google Fonts](https://fonts.google.com) برخصة SIL Open Font License (ملفات `fonts/OFL-*.txt`)؛ المتغيرة منها حُوّلت لنسخ عريضة ثابتة.
+
+## 🎨 تصميم كحلي وذهبي (موشن جرافيك)
+
+ستايل كامل مأخوذ من فيديو مرجعي: المتكلم في إطار مدوّر يلمع على خلفية كحلي، والكلام يطلع كلمة كلمة في كبسولة
+(آخر كلمة بالذهبي والكلمات المهمة على مربع ذهبي)، ولكل فكرة رسم متحرك: خط زمني، أشهر، ورقة مهام، اقتباس، ساعة،
+أعمدة، درج، أيقونات، ملعب...
+
+```
+python navygold.py analyze فيديو.mp4 --out workspace/jobs/تصميم1   # تفريغ + قص
+python navygold.py auto workspace/jobs/تصميم1                       # خطة أولية بدون ذكاء اصطناعي (اختياري)
+python navygold.py render workspace/jobs/تصميم1                     # الفيديو النهائي navygold.mp4
+```
+أفضل نتيجة: افتح Claude Code واكتب `/navy-gold-reel`. يقرأ الكلام ويختار الرسم المناسب لكل جملة في `scenes.json`.
+شرح كل الرسوم وطريقة كتابة الملف موجود في `.claude/skills/navy-gold-reel/SKILL.md`.
