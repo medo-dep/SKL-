@@ -88,6 +88,12 @@ DEFAULT_OPTIONS = {
     "pexels": False,
     "pexels_key": "",
     "pexels_keywords": "",
+    # motion graphics on the key words
+    "motion_highlights": False,
+    "highlight_density": "normal",  # few / normal / many
+    "highlight_words": "",  # words the speaker wants emphasised, comma separated
+    "punch_zoom": True,
+    "highlight_images": False,  # Pexels photos for highlighted words (needs pexels_key)
     # transcription
     "whisper_model": "small",
     "language": "",  # "" = auto detect
@@ -264,7 +270,8 @@ def plan_cuts(inputs, opts, log):
         log(f"تحليل {name} ({info['duration']:.1f} ث)")
 
         words = None
-        wants_english = opts["english_subs"] or (opts["pexels"] and not opts["pexels_keywords"].strip())
+        wants_english = (opts["english_subs"] or (opts["pexels"] and not opts["pexels_keywords"].strip())
+                         or (opts["motion_highlights"] and opts["highlight_images"] and opts["pexels_key"].strip()))
         needs_words = (opts["captions"] or opts["remove_fillers"] or opts["remove_bad_takes"]
                        or opts["text_hook"] or wants_english)
         if needs_words and info["has_audio"]:
@@ -423,6 +430,8 @@ def ass_header(w, h, opts):
         f"Hook,{FONT_NAME},{int(84 * k)},{box},{box},{text},{text},1,0,0,0,100,100,0,0,3,{int(22 * k)},0,{hook_align},80,80,{hook_margin},-1",
         f"English,{FONT_NAME},{int(size * 0.58)},&H00FFFFFF,&H00FFFFFF,&H70000000,&H70000000,1,0,0,0,100,100,0,0,3,{int(10 * k)},0,2,90,90,{en_margin},-1",
         f"Thumb,{FONT_NAME},{int(128 * k)},{text},{text},{box},{box},1,0,0,0,100,100,0,0,3,{int(26 * k)},0,2,70,70,{int(0.2 * h)},-1",
+        f"HL,{FONT_NAME},{int(size * 1.6)},{text},{text},&H00000000,&H64000000,1,0,0,0,100,100,0,0,1,0,{int(4 * k)},5,40,40,0,-1",
+        f"HLSmall,{FONT_NAME},{int(size * 0.62)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,{int(4 * k)},0,5,60,60,0,-1",
         f"EndTitle,{FONT_NAME},{int(110 * k)},{end_text},{end_text},&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,0,0,5,60,60,0,-1",
         f"EndContact,{FONT_NAME},{int(64 * k)},{end_text},{end_text},&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,0,0,2,60,60,{int(0.3 * h)},-1",
     ]
@@ -503,6 +512,196 @@ def fetch_pexels(keywords, key, aspect, out_dir, log):
         except Exception as exc:
             log(f"⚠️ Pexels «{kw}»: {str(exc)[:120]}")
     return paths
+
+
+# ---------------------------------------------------------------- motion highlights
+
+AR_STOP = set("""في من على الى عن هذا هذه ذلك تلك اللي التي الذي الذين و او ثم لكن بس يعني كان كانت يكون تكون هو هي
+انا احنا نحن انت انتم هم ما لا لم لن قد كل بعض مع عند عشان علشان لما اذا لو كيف ليش وش ايش شو هنا هناك الحين الان
+اليوم شي شيء كثير جدا مره طيب اوكي والله السلام عليكم يا اي ايه فيه فيها منه منها عليه عليها له لها لهم بعد قبل حتى
+اما انه انها ان كمان برضو زي مثل هيك كذا كذه خلاص يعني تعرف عارف شوف خلي خلينا نحكي نتكلم بنتكلم""".split())
+CUES = set("""اهم السر سر نصيحه انتبه لازم ضروري افضل اخطر مشكله الحل خطوه ابدا دايما دائما اول اكبر اصغر اسرع مهم
+important secret tip never always best key mistake first biggest""".split())
+NUMBER_WORDS = {"مليون", "مليار", "الف", "الاف", "ميه", "مئه", "مايه", "ضعف", "نص", "ربع"}
+AR_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
+
+
+def norm_ar(text):
+    t = re.sub(r"[ً-ْـ]", "", text.lower())  # tashkeel, tatweel
+    t = re.sub("[إأآ]", "ا", t).replace("ى", "ي").replace("ة", "ه")
+    return re.sub(r"[^\w%٪]", "", t)
+
+
+def stem(text):
+    t = norm_ar(text)
+    for p in ("وال", "بال", "فال", "كال", "لل", "ال", "و"):
+        if t.startswith(p) and len(t) - len(p) >= 3:
+            return t[len(p):]
+    return t
+
+
+def parse_number(text):
+    m = re.search(r"\d+(?:[.,]\d+)?", text.translate(AR_DIGITS))
+    return float(m.group(0).replace(",", ".")) if m else None
+
+
+def word_loudness(path, words):
+    """Loudness of each word in dB (relative values are what matter)."""
+    import numpy as np
+
+    audio = load_audio(path)
+    out = []
+    for w in words:
+        clip = audio[int(w["start"] * 16000):max(int(w["start"] * 16000) + 1, int(w["end"] * 16000))]
+        out.append(20 * np.log10(float(np.sqrt(np.mean(clip ** 2))) + 1e-6) if len(clip) else -90.0)
+    return out
+
+
+def find_highlights(words, loud, opts, content, busy):
+    """Pick the key moments: numbers, stressed words, words after cue phrases, repeated words, the user's own words."""
+    manual = [stem(m) for m in re.split(r"[,،\n]", opts["highlight_words"]) if stem(m)]
+    stems = [stem(w["text"]) for w in words]
+    freq = Counter(t for t in stems if len(t) >= 3 and t not in AR_STOP and t not in STOPWORDS)
+    median = sorted(loud)[len(loud) // 2] if loud else 0
+    scored = []
+    for i, w in enumerate(words):
+        t, num = stems[i], parse_number(w["text"])
+        is_num = num is not None or t in NUMBER_WORDS
+        mine = any(m and (m in t or t in m) for m in manual) and len(t) >= 2
+        if not (is_num or mine) and (len(t) < 3 or t in AR_STOP or t in STOPWORDS or t in FILLERS):
+            continue
+        score = 10 if mine else 0
+        score += 4 if is_num else 0
+        score += 2.5 if any(stems[j] in CUES for j in range(max(0, i - 3), i)) else 0
+        score += min(2.0, (freq[t] - 1) * 0.7)
+        score += max(0.0, min(3.0, (loud[i] - median) / 2)) if loud else 0
+        score += min(1.0, (len(t) - 3) * 0.2)
+        if score >= 2.5:
+            scored.append((score, i, num))
+    per = {"few": 20, "many": 7}.get(opts["highlight_density"], 12)
+    limit = max(1, int(content // per))
+    picked = []
+    for score, i, num in sorted(scored, reverse=True):
+        start = max(0.0, words[i]["start"] - 0.08)
+        end = start + 1.7
+        if end > content - 0.2 or any(start < b and end > a for a, b in busy) \
+                or any(abs(start - p["start"]) < 6 or stems[p["index"]] == stems[i] for p in picked):
+            continue
+        picked.append({"start": start, "end": end, "index": i, "word": words[i]["text"], "number": num,
+                       "kind": "number" if num is not None else "word"})
+        if len(picked) >= limit:
+            break
+    return sorted(picked, key=lambda p: p["start"])
+
+
+VAGUE = set("""biggest bigger small smaller good better great many much every each something anything everything
+talk talking today tomorrow about take care need needs want wants said says very really make makes""".split())
+
+
+def english_keyword(en_items, t):
+    """Search term for a photo: the sentence's most repeated content word (plus the word after it)."""
+    item = next((e for e in en_items if e["start"] - 0.3 <= t <= e["end"] + 0.3), None)
+    if not item:
+        return None
+    every = Counter(x for e in en_items for x in re.findall(r"[a-z]+", e["text"].lower()))
+    tokens = re.findall(r"[a-z]+", item["text"].lower())
+    ok = [i for i, x in enumerate(tokens) if len(x) >= 4 and x not in STOPWORDS and x not in VAGUE]
+    if not ok:
+        return None
+    best = max(ok, key=lambda i: (every[tokens[i]], len(tokens[i])))
+    nxt = best + 1
+    if nxt in ok:
+        return f"{tokens[best]} {tokens[nxt]}"
+    return tokens[best]
+
+
+def fetch_pexels_photo(query, key, orientation, out_dir, log):
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, f"photo-{re.sub(r'[^a-z0-9]+', '-', query.lower())}.jpg")
+    if os.path.exists(path):
+        return path
+    try:
+        url = "https://api.pexels.com/v1/search?" + urllib.parse.urlencode(
+            {"query": query, "per_page": 1, "orientation": orientation})
+        req = urllib.request.Request(url, headers={"Authorization": key, "User-Agent": "raw-to-reel"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            photos = json.load(resp).get("photos", [])
+        if not photos:
+            return None
+        req = urllib.request.Request(photos[0]["src"]["large"], headers={"User-Agent": "raw-to-reel"})
+        with urllib.request.urlopen(req, timeout=60) as resp, open(path, "wb") as f:
+            shutil.copyfileobj(resp, f)
+        return path
+    except Exception as exc:
+        log(f"⚠️ صورة Pexels «{query}»: {str(exc)[:100]}")
+        return None
+
+
+def rounded_rect(bw, bh, r):
+    bw, bh, r = int(bw), int(bh), int(min(r, bw / 2, bh / 2))
+    return (f"m {r} 0 l {bw - r} 0 b {bw} 0 {bw} 0 {bw} {r} l {bw} {bh - r} b {bw} {bh} {bw} {bh} {bw - r} {bh} "
+            f"l {r} {bh} b 0 {bh} 0 {bh} 0 {bh - r} l 0 {r} b 0 0 0 0 {r} 0")
+
+
+def format_number(value, original):
+    s = f"{int(round(value))}" if float(value).is_integer() or value >= 10 else f"{value:.1f}"
+    if re.search("[٠-٩]", original):
+        s = s.translate(str.maketrans("0123456789", "٠١٢٣٤٥٦٧٨٩"))
+    suffix = re.sub(r"[\d٠-٩۰-۹.,]+", "", original)
+    return s + suffix if re.search(r"[\d٠-٩۰-۹]", original) else original
+
+
+def highlight_events(hl, x, y, opts, w, h, context=""):
+    """ASS events for one highlight: a pill that slams in with a burst of lines, plus the sentence under it."""
+    text_c, box_c, hl_c, _ = PALETTES.get(opts["caption_color"], PALETTES["orange"])
+    k = min(w, h) / 1080
+    size = CAPTION_SIZES.get(opts["caption_size"], 92) * k * 1.6
+    word = hl["word"] if hl["kind"] != "number" else format_number(hl["number"], hl["word"])
+    size = min(size, 0.78 * w / max(1, len(word) * 0.55))
+    bw, bh = len(word) * size * 0.55 + size * 0.9, size * 1.45
+    s0, s1 = hl["start"], hl["end"]
+    slam = "\\fscx20\\fscy20\\t(0,160,\\fscx112\\fscy112)\\t(160,270,\\fscx100\\fscy100)\\frz-4\\t(0,270,\\frz0)\\fad(0,220)"
+    ev = [dialogue(s0, s1, "HL", f"{{\\an5\\pos({int(x)},{int(y)})\\p1\\bord0\\shad{int(5 * k)}\\1c{box_c}{slam}}}"
+                                 + rounded_rect(bw, bh, bh * 0.28), 3)]
+    if hl["kind"] == "number" and hl["number"]:
+        steps = 14
+        for i in range(steps):
+            a, b = s0 + 0.05 * i, s0 + 0.05 * (i + 1)
+            val = hl["number"] * (1 - (1 - (i + 1) / steps) ** 3)  # ease-out count up
+            tags = f"\\an5\\pos({int(x)},{int(y)})\\fs{int(size)}" + (slam.replace("\\fad(0,220)", "") if i == 0 else "")
+            ev.append(dialogue(a, b if i < steps - 1 else s1, "HL",
+                               f"{{{tags}{chr(92)}fad(0,{220 if i == steps - 1 else 0})}}"
+                               + ass_escape(format_number(val, hl["word"])), 4))
+    else:
+        ev.append(dialogue(s0, s1, "HL", f"{{\\an5\\pos({int(x)},{int(y)})\\fs{int(size)}{slam}}}" + ass_escape(word), 4))
+    import math
+    for i in range(8):
+        ang = math.radians(22.5 + 45 * i)
+        rx0, ry0, grow = bw / 2 + 8 * k, bh / 2 + 8 * k, 70 * k
+        x0, y0 = x + math.cos(ang) * rx0, y + math.sin(ang) * ry0
+        x1, y1 = x + math.cos(ang) * (rx0 + grow), y + math.sin(ang) * (ry0 + grow)
+        length, thick = int(46 * k), max(4, int(9 * k))
+        ev.append(dialogue(s0 + 0.08, s0 + 0.5, "HL",
+                           f"{{\\an4\\move({int(x0)},{int(y0)},{int(x1)},{int(y1)},0,380)\\frz{-math.degrees(ang):.0f}"
+                           f"\\p1\\bord0\\shad0\\1c{hl_c}\\t(180,380,\\alpha&HFF&)}}m 0 0 l {length} 0 l {length} {thick} l 0 {thick}", 3))
+    if context:
+        ev.append(dialogue(s0 + 0.15, s1, "HLSmall", f"{{\\an5\\pos({int(x)},{int(y + bh / 2 + size * 0.45)})\\fad(150,220)}}"
+                           + ass_escape(context), 4))
+    return ev
+
+
+def punch_zoom_filter(windows, w, h):
+    """zoompan expression: a quick 8% push-in towards the face during each highlight."""
+    if not windows:
+        return None
+    env = "+".join(f"between(it,{a:.2f},{b:.2f})*min(1,(it-{a:.2f})/0.15)*min(1,({b:.2f}-it)/0.25)"
+                   for a, b, _, _ in windows)
+    cx = "+".join(f"between(it,{a:.2f},{b:.2f})*{fx:.3f}" for a, b, fx, _ in windows)
+    cy = "+".join(f"between(it,{a:.2f},{b:.2f})*{fy:.3f}" for a, b, _, fy in windows)
+    inside = "+".join(f"between(it,{a:.2f},{b:.2f})" for a, b, _, _ in windows)
+    fx_e, fy_e = f"({cx}+(1-min(1,{inside}))*0.5)", f"({cy}+(1-min(1,{inside}))*0.4)"
+    return (f"zoompan=z='1+0.08*({env})':x='clip(iw*{fx_e}-iw/zoom/2,0,iw-iw/zoom)'"
+            f":y='clip(ih*{fy_e}-ih/zoom/2,0,ih-ih/zoom)':d=1:s={w}x{h}:fps={FPS}")
 
 
 # ---------------------------------------------------------------- rendering
@@ -771,14 +970,35 @@ def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, track
     run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", f"{prefix}_parts.txt",
          "-c", "copy", joined], cwd=job_dir)
 
-    # 2. subtitles
+    brolls = plan_broll(assets.get("broll", []), content, reel_no)
+
+    # 2. subtitles and motion highlights
     words = timeline_words(segments)
     chunks = caption_chunks(words) if opts["captions"] else []
-    en_items = timeline_english(segments, english) if opts["english_subs"] else []
+    en_all = timeline_english(segments, english)
+    en_items = en_all if opts["english_subs"] else []
     hook = ""
     if opts["text_hook"]:
         hook = opts["hook_text"].strip() or " ".join(w["text"] for w in words[:6])
-    has_ass = bool(chunks or en_items or hook)
+    highlights = []
+    if opts["motion_highlights"] and words:
+        busy = [(b["start"], b["start"] + b["dur"]) for b in brolls] + ([(0.0, 3.2)] if hook else [])
+        highlights = find_highlights(words, word_loudness(os.path.join(job_dir, joined), words), opts, content, busy)
+        if opts["highlight_images"] and opts["pexels_key"].strip():
+            orientation = {"16:9": "landscape", "1:1": "square"}.get(opts["aspect"], "landscape")
+            for n, hl in enumerate(highlights):
+                query = english_keyword(en_all, hl["start"]) if hl["kind"] == "word" and n % 2 == 0 else None
+                photo = query and fetch_pexels_photo(query, opts["pexels_key"].strip(), orientation,
+                                                     os.path.join(job_dir, "pexels"), log)
+                if photo:
+                    hl.update(kind="image", image=photo, end=hl["start"] + 2.6)
+        n = len(highlights)
+        label = {0: "ما لقيت كلمات مهمة", 1: "موشن على كلمة مهمة وحدة", 2: "موشن على كلمتين مهمتين"}.get(
+            n, f"موشن على {n} كلمات مهمة" if n <= 10 else f"موشن على {n} كلمة مهمة")
+        progress(label + (": " + "، ".join(hl["word"] for hl in highlights) if n else ""), 0.62)
+    # the highlight card replaces the caption while it is on screen (the .srt keeps everything)
+    shown = [c for c in chunks if not any(c["start"] < hl["end"] and c["end"] > hl["start"] for hl in highlights)]
+    has_ass = bool(shown or en_items or hook or highlights)
     auto = opts["caption_position"] == "auto" and bool(faces)
     k = min(w, h) / 1080
     cap_size = CAPTION_SIZES.get(opts["caption_size"], 92) * k
@@ -786,7 +1006,7 @@ def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, track
     if auto:
         # captions: a zone clear of the face (and torso if possible), sticking with the last zone while it stays clear
         place, prev = [], None
-        for c in chunks:
+        for c in shown:
             hh, hw = text_block(c["text"], cap_size, w)
             prev = choose_zone(faces_in(faces, c["start"], c["end"]), hh + 14 * k, hw, w, h,
                                ["lower", "upper", "top", "bottom"], prev)
@@ -804,15 +1024,39 @@ def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, track
             if overlaps(y, hh, hw, boxes, w, h, False) and not overlaps(below, hh, hw, boxes, w, h, False):
                 y = below
             en_place.append(at(w / 2, y))
+            cap_spots.append((e["start"], e["end"], y, hh))
         if hook:
             hh, hw = text_block(hook, 84 * k, w)
             busy = [(y, ch) for s0, _, y, ch in cap_spots if s0 < 3.0]
             zone = choose_zone(faces_in(faces, 0, 3.0), hh + 22 * k, hw, w, h, ["top", "upper", "bottom"], avoid=busy)
             hook_place = at(w / 2, ZONES[zone] * h)
+    # highlights: a spot clear of the face and of any English line on screen at the time
+    hl_size = cap_size * 1.6
+    for hl in highlights:
+        if hl["kind"] == "image":
+            cw = int(w * (0.34 if w > h else 0.62)) // 2 * 2
+            hl["card"] = (cw, int(cw * 0.72) // 2 * 2)
+            half_h, half_w = (hl["card"][1] + 20 + hl_size * 1.5) / 2, (cw + 20) / 2
+        else:
+            half_h, half_w = hl_size * 0.73 + cap_size * 0.6, w * 0.4
+        busy = [(y, hh) for s0, e0, y, hh in cap_spots if s0 < hl["end"] and e0 > hl["start"] and hh < cap_size]
+        zone = choose_zone(faces_in(faces, hl["start"], hl["end"]), half_h, half_w, w, h,
+                           ["upper", "top", "lower", "bottom"], avoid=busy) if faces else "upper"
+        hl["y"] = min(max(ZONES[zone] * h, 0.08 * h + half_h), 0.88 * h - half_h)  # keep clear of the app UI
+        hl["face"] = (faces_in(faces, hl["start"], hl["end"]) or [(w / 2, h * 0.4, 0, 0)])[0]
     if has_ass:
         with open(os.path.join(job_dir, f"{prefix}.ass"), "w", encoding="utf-8") as f:
             f.write(ass_header(w, h, opts))
-            f.writelines(caption_events(chunks, opts, place))
+            f.writelines(caption_events(shown, opts, place))
+            for hl in highlights:
+                context = next((c["text"] for c in chunks if c["start"] <= hl["start"] + 0.1 <= c["end"] + 0.2), "")
+                if hl["kind"] == "image":
+                    ch = hl["card"][1] + 20
+                    label_y = hl["y"] - (ch + hl_size * 1.5) / 2 + ch + hl_size * 0.75 + 6
+                    f.writelines(highlight_events(dict(hl, kind="word"), w / 2, label_y, opts, w, h))
+                else:
+                    f.writelines(highlight_events(hl, w / 2, hl["y"] - cap_size * 0.3, opts, w, h,
+                                                  context if context != hl["word"] else ""))
             f.writelines(dialogue(e["start"], e["end"], "English", (en_place[i] if en_place else "")
                                   + ass_escape(e["text"]), 1) for i, e in enumerate(en_items))
             if hook:
@@ -854,7 +1098,11 @@ def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, track
         return n_in - 1
 
     v = "0:v"
-    brolls = plan_broll(assets.get("broll", []), content, reel_no)
+    zooms = [(hl["start"], hl["end"], hl["face"][0] / w, hl["face"][1] / h)
+             for hl in highlights if hl["kind"] != "image"] if opts["punch_zoom"] else []
+    if zooms:
+        vchain.append(f"[{v}]{punch_zoom_filter(zooms, w, h)}[vz]")
+        v = "vz"
     for j, b in enumerate(brolls):
         src = add_input("-loop", "1", "-t", str(b["dur"]), "-i", b["path"]) if is_image(b["path"]) \
             else add_input("-t", str(b["dur"]), "-i", b["path"])
@@ -864,6 +1112,18 @@ def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, track
                       f"setpts=PTS-STARTPTS+{b['start']}/TB[b{j}]")
         vchain.append(f"[{v}][b{j}]overlay=eof_action=pass:enable='between(t,{b['start']},{b['start'] + b['dur']})'[vb{j}]")
         v = f"vb{j}"
+    for j, hl in enumerate(hl for hl in highlights if hl["kind"] == "image"):
+        cw, ch = hl["card"]
+        d, t0 = hl["end"] - hl["start"], hl["start"]
+        top = int(hl["y"] - (ch + 20 + hl_size * 1.5) / 2)
+        src = add_input("-loop", "1", "-framerate", str(FPS), "-t", f"{d:.2f}", "-i", hl["image"])
+        vchain.append(f"[{src}:v]scale={int(cw * 1.12) // 2 * 2}:{int(ch * 1.12) // 2 * 2}:force_original_aspect_ratio=increase,"
+                      f"crop={cw}:{ch}:x='(iw-ow)*min(1,t/{d:.2f})':y='(ih-oh)/2',pad={cw + 20}:{ch + 20}:10:10:white,"
+                      f"setsar=1,format=yuva420p,fade=in:st=0:d=0.2:alpha=1,fade=out:st={d - 0.25:.2f}:d=0.25:alpha=1,"
+                      f"setpts=PTS-STARTPTS+{t0:.2f}/TB[hi{j}]")
+        vchain.append(f"[{v}][hi{j}]overlay=x='(W-w)/2+W*0.7*pow(max(0,1-(t-{t0:.2f})/0.3),2)':y={top}"
+                      f":eof_action=pass:enable='between(t,{t0:.2f},{t0 + d:.2f})'[vh{j}]")
+        v = f"vh{j}"
     if has_ass:
         vchain.append(f"[{v}]ass={prefix}.ass:fontsdir=fonts[vs]")
         v = "vs"
@@ -889,7 +1149,7 @@ def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, track
     achain.append(f"[0:a]{voice}[a0]")
     a = "a0"
     if opts["sfx"]:
-        hits = sorted(set(round(t, 2) for t in boundaries + [b["start"] for b in brolls]
+        hits = sorted(set(round(t, 2) for t in boundaries + [b["start"] for b in brolls] + [hl["start"] for hl in highlights]
                           + ([content] if end_card else [])))
         hits = [t for i, t in enumerate(hits) if t > 0.3 and (i == 0 or t - hits[i - 1] > 1.0)]
         if hits:
@@ -929,6 +1189,7 @@ def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, track
         "thumbnail": thumb,
         "seconds": round(total / speed, 2),
         "broll": len(brolls),
+        "highlights": [hl["word"] for hl in highlights],
     }
 
 

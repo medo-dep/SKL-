@@ -137,10 +137,18 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_json({"id": job_id})
 
 
+class Server(ThreadingHTTPServer):
+    def handle_error(self, request, client_address):
+        # the browser closing a video mid-stream is normal; don't print a scary traceback for it
+        import sys
+        if not isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError, ConnectionAbortedError)):
+            super().handle_error(request, client_address)
+
+
 def main():
     os.makedirs(UPLOADS, exist_ok=True)
     os.makedirs(JOBS_DIR, exist_ok=True)
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    server = Server(("127.0.0.1", PORT), Handler)
     url = f"http://127.0.0.1:{PORT}"
     print(f"Raw to Reel is running at {url}")
     if os.environ.get("NO_BROWSER") != "1":
