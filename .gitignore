@@ -1,3 +1,6 @@
 raw-to-reel/workspace/
 __pycache__/
 .DS_Store
+raw-to-reel/models/whisper/
+RawToReel-Portable/
+RawToReel-Portable.zip

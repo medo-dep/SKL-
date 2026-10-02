@@ -19,6 +19,7 @@ from collections import Counter
 FPS = 30
 HERE = os.path.dirname(os.path.abspath(__file__))
 FACE_MODEL = os.path.join(HERE, "models", "face_detection_yunet_2023mar.onnx")
+WHISPER_DIR = os.path.join(HERE, "models", "whisper")  # filled by tools/make_portable.py for offline PCs
 FONT_FILE = os.path.join(HERE, "fonts", "Qatar2022Arabic-Bold.ttf")
 FONT_NAME = "Qatar2022 Arabic"
 
@@ -181,8 +182,10 @@ def _transcribe(path, model_name, lang, log, translate):
     except ImportError:
         WhisperModel = None
     if WhisperModel:
+        local = {"download_root": WHISPER_DIR} if os.path.isdir(WHISPER_DIR) else {}
+
         def run_on(device):
-            model = WhisperModel(model_name, device=device, compute_type="int8")
+            model = WhisperModel(model_name, device=device, compute_type="int8", **local)
             segments, _ = model.transcribe(audio, language=lang, word_timestamps=True)
             words = [{"start": w.start, "end": w.end, "text": w.word.strip()}
                      for seg in segments for w in (seg.words or [])]
@@ -737,7 +740,13 @@ def track_faces(path, log, fps=2.0):
         return None
     fh, fw = img.shape[:2]
     try:
-        detector = cv2.FaceDetectorYN.create(FACE_MODEL, "", (fw, fh), 0.6)
+        # load from memory: OpenCV can't open files under non-ASCII paths (e.g. an Arabic Windows user name)
+        with open(FACE_MODEL, "rb") as f:
+            model = np.frombuffer(f.read(), np.uint8)
+        try:
+            detector = cv2.FaceDetectorYN.create("onnx", model, np.array([], np.uint8), (fw, fh), 0.6)
+        except cv2.error:
+            detector = cv2.FaceDetectorYN.create(FACE_MODEL, "", (fw, fh), 0.6)
     except Exception as exc:  # very old OpenCV without YuNet, or model missing
         log(f"⚠️ تعذّر تشغيل كاشف الوجه: {str(exc)[:120]}")
         return None
