@@ -192,8 +192,29 @@ async function startJobs(mode) {
   for (const k of Object.keys(jobs)) delete jobs[k];
   res.ids.forEach((id) => (jobs[id] = { id, status: "queued", progress: 0, name: "" }));
   current = res.ids[0];
+  remember();
   res.ids.forEach(poll);
 }
+
+// remember running jobs so a page refresh picks them back up
+const JOBS_KEY = "raw-to-reel-jobs";
+function remember() {
+  localStorage.setItem(JOBS_KEY, JSON.stringify({ ids: Object.keys(jobs), current }));
+}
+(async function resume() {
+  const last = JSON.parse(localStorage.getItem(JOBS_KEY) || "null");
+  if (!last || !last.ids || !last.ids.length) return;
+  const alive = [];
+  for (const id of last.ids) {
+    const r = await fetch(`/api/status/${id}`);
+    if (r.ok) alive.push(id);
+  }
+  if (!alive.length) { localStorage.removeItem(JOBS_KEY); return; } // the server was restarted
+  alive.forEach((id) => (jobs[id] = { id, status: "queued", progress: 0, name: "" }));
+  current = alive.includes(last.current) ? last.current : alive[0];
+  setBusy(true);
+  alive.forEach(poll);
+})();
 $("go").onclick = () => startJobs(readOptions().review_mode ? "review" : "auto");
 $("quick").onclick = () => startJobs("preview");
 
@@ -215,7 +236,9 @@ function renderJobs() {
       <b>${esc(j.name || "فيديو")}</b> — ${STATUS[j.status] || ""}
       <div class="jbar"><div style="width:${Math.round((j.progress || 0) * 100)}%"></div></div>
     </div>`).join("");
-  $("jobs").querySelectorAll(".job").forEach((el) => (el.onclick = () => { current = el.dataset.id; renderJobs(); showJob(jobs[current]); }));
+  $("jobs").querySelectorAll(".job").forEach((el) => (el.onclick = () => {
+    current = el.dataset.id; remember(); renderJobs(); showJob(jobs[current]);
+  }));
 }
 
 function showJob(job) {
