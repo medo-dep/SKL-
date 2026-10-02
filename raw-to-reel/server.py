@@ -21,7 +21,7 @@ JOBS_DIR = os.path.join(WORK, "jobs")
 PRESETS_FILE = os.path.join(WORK, "presets.json")
 PORT = int(os.environ.get("PORT", "4680"))
 JOBS = {}
-UPLOAD_KINDS = ("video", "music", "logo", "broll")
+UPLOAD_KINDS = ("video", "music", "logo", "broll", "font")
 TASKS = queue.Queue()  # one worker: videos are edited one after another, never in parallel
 
 
@@ -110,8 +110,12 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(editor.load_dictionary())
         elif url.path == "/api/presets":
             return self.send_json(read_json(PRESETS_FILE, {}))
+        elif url.path == "/api/fonts":
+            return self.send_json({k: {"file": f, "family": fam, "label": label} for k, (f, fam, label, _, _)
+                                   in editor.FONTS.items()})
         elif not (url.path in ("/index.html", "/app.js")
-                  or url.path.startswith(("/workspace/jobs/", "/workspace/uploads/video/"))):
+                  or url.path.startswith(("/workspace/jobs/", "/workspace/uploads/video/", "/workspace/uploads/font/",
+                                          "/fonts/"))):
             return self.send_error(404)
         return super().do_GET()
 
@@ -138,6 +142,15 @@ class Handler(SimpleHTTPRequestHandler):
         if remaining > 0:
             os.remove(path)
             return self.send_json({"error": "انقطع الرفع قبل ما يكتمل، جرّب مرة ثانية"}, 400)
+        if kind == "font":
+            try:
+                family, weight = editor.font_info(path)
+            except Exception:  # not a font file
+                family = None
+            if not family:
+                os.remove(path)
+                return self.send_json({"error": "الملف مو خط (لازم .ttf أو .otf)"}, 400)
+            return self.send_json({"id": name, "kind": kind, "family": family})
         try:
             info = editor.probe(path)
         except Exception as exc:  # not a readable media file, or ffprobe missing
@@ -201,6 +214,7 @@ class Handler(SimpleHTTPRequestHandler):
             "music": uploaded("music", body.get("music")),
             "logo": uploaded("logo", body.get("logo")),
             "broll": [p for p in (uploaded("broll", b) for b in body.get("broll", [])) if p],
+            "font": uploaded("font", body.get("font")),
         }
         options = body.get("options", {})
         mode = body.get("mode", "auto")  # auto | review | preview

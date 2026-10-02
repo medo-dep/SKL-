@@ -1,7 +1,9 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
 const clips = []; // { id, name, el, uploading }
-const assets = { music: null, logo: null, broll: [] };
+const assets = { music: null, logo: null, broll: [], font: null };
+let fontFiles = {}; // caption font key -> bundled file, for the live preview
+const loadedFonts = {};
 
 const STORE = "raw-to-reel-options";
 const saved = JSON.parse(localStorage.getItem(STORE) || "{}");
@@ -36,6 +38,8 @@ function saveOptions() {
 
 function syncSubs() {
   document.querySelectorAll("[data-sub]").forEach((el) => $(el.dataset.sub).classList.toggle("show", el.checked));
+  const fontSel = document.querySelector("[data-opt=caption_font]");
+  if (fontSel) { $("fontSub").classList.toggle("show", fontSel.value === "custom"); previewFont(); }
   const src = document.querySelector("[data-opt=music_source]");
   if (src) $("musicPicker").parentElement.style.display = src.value === "upload" ? "" : "none";
 }
@@ -130,6 +134,23 @@ function picker(input, label, kind, multiple) {
 picker("musicPicker", "musicName", "music", false);
 picker("logoPicker", "logoName", "logo", false);
 picker("brollPicker", "brollName", "broll", true);
+picker("fontPicker", "fontName", "font", false);
+
+// live preview of the caption font
+fetch("/api/fonts").then((r) => r.json()).then((f) => { fontFiles = f; previewFont(); });
+async function previewFont() {
+  const key = document.querySelector("[data-opt=caption_font]")?.value;
+  const url = key === "custom" ? (assets.font && `/workspace/uploads/font/${encodeURIComponent(assets.font)}`)
+    : fontFiles[key] && `/fonts/${encodeURIComponent(fontFiles[key].file)}`;
+  if (!url) return;
+  const name = `pv-${key}-${assets.font || ""}`.replace(/[^\w-]/g, "_");
+  if (!loadedFonts[name]) {
+    try { const face = new FontFace(name, `url(${url})`); await face.load(); document.fonts.add(face); loadedFonts[name] = true; }
+    catch (e) { return; }
+  }
+  $("fontPreview").style.fontFamily = `"${name}", sans-serif`;
+}
+$("fontPicker").addEventListener("change", () => setTimeout(previewFont, 1500));
 
 // ---------------------------------------------------------------- presets & dictionary
 

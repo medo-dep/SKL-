@@ -27,6 +27,101 @@ LIB_DIR = os.path.join(HERE, "workspace", "library")  # generated music / sfx ca
 WHISPER_DIR = os.path.join(HERE, "models", "whisper")  # filled by tools/make_portable.py for offline PCs
 FONT_FILE = os.path.join(HERE, "fonts", "Qatar2022Arabic-Bold.ttf")
 FONT_NAME = "Qatar2022 Arabic"
+# key -> (file in fonts/, family name, label, bold flag, size factor so every font fills a line like Qatar does)
+FONTS = {
+    "qatar": ("Qatar2022Arabic-Bold.ttf", "Qatar2022 Arabic", "قطر 2022", 1, 1.0),
+    "tajawal": ("Tajawal-ExtraBold.ttf", "Tajawal", "تجوال", 1, 0.96),
+    "almarai": ("Almarai-ExtraBold.ttf", "Almarai", "المراعي", 1, 1.03),
+    "cairo": ("Cairo-Bold.ttf", "Cairo", "القاهرة", 1, 1.25),
+    "changa": ("Changa-Bold.ttf", "Changa", "تشانغا", 1, 1.33),
+    "lalezar": ("Lalezar-Regular.ttf", "Lalezar", "لاله زار (عريض)", 0, 1.33),
+    "reemkufi": ("ReemKufi-Bold.ttf", "Reem Kufi", "ريم كوفي", 1, 1.44),
+    "elmessiri": ("ElMessiri-Bold.ttf", "El Messiri", "المسيري", 1, 1.07),
+    "marhey": ("Marhey-Bold.ttf", "Marhey", "مرحي (مرح)", 1, 1.21),
+    "lemonada": ("Lemonada-Bold.ttf", "Lemonada", "ليمونادة", 1, 0.96),
+    "notokufi": ("NotoKufiArabic-Bold.ttf", "Noto Kufi Arabic", "نوتو كوفي", 1, 1.29),
+    "amiri": ("Amiri-Bold.ttf", "Amiri", "أميري (نسخ)", 1, 2.2),
+    "arefruqaa": ("ArefRuqaa-Bold.ttf", "Aref Ruqaa", "عارف رقعة", 1, 1.62),
+    "rakkas": ("Rakkas-Regular.ttf", "Rakkas", "رقاص (زخرفي)", 0, 1.48),
+    "jomhuria": ("Jomhuria-Regular.ttf", "Jomhuria", "جمهورية (عريض جداً)", 0, 1.79),
+    "katibeh": ("Katibeh-Regular.ttf", "Katibeh", "كاتبة (يدوي)", 0, 1.15),
+    "harmattan": ("Harmattan-Bold.ttf", "Harmattan", "هرمتان", 1, 1.74),
+}
+
+
+def font_info(path):
+    """(family, weight) from a .ttf/.otf name/OS2 table, read the way libass matches fonts (Windows name ID 1)."""
+    import struct
+
+    with open(path, "rb") as f:
+        data = f.read()
+    tables = {data[12 + 16 * i:16 + 16 * i]: struct.unpack(">II", data[20 + 16 * i:28 + 16 * i])
+              for i in range(struct.unpack(">H", data[4:6])[0])}
+    family, weight = None, 400
+    if b"name" in tables:
+        off = tables[b"name"][0]
+        count, strings = struct.unpack(">HH", data[off + 2:off + 6])
+        for i in range(count):
+            plat, enc, lang, nid, length, soff = struct.unpack(">HHHHHH", data[off + 6 + 12 * i:off + 18 + 12 * i])
+            raw = data[off + strings + soff:off + strings + soff + length]
+            if nid == 1 and plat == 3:
+                family = raw.decode("utf-16-be", "replace")
+                break
+            if nid == 1 and plat == 1 and not family:
+                family = raw.decode("mac_roman", "replace")
+    if b"OS/2" in tables:
+        weight = struct.unpack(">H", data[tables[b"OS/2"][0] + 4:tables[b"OS/2"][0] + 6])[0]
+    return family, weight
+
+
+def text_width(font_file, family, bold, sample="السلام عليكم ورحمة الله"):
+    """Rendered width (px) of a sample line in a font, through libass exactly like the captions."""
+    import tempfile
+
+    import numpy as np
+
+    with tempfile.TemporaryDirectory() as tmp:
+        shutil.copy(font_file, tmp)
+        with open(os.path.join(tmp, "m.ass"), "w", encoding="utf-8") as f:
+            f.write("[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 600\n\n[V4+ Styles]\n"
+                    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, "
+                    "Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+                    "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+                    f"Style: S,{family},60,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,{bold},0,0,0,100,100,0,0,1,0,0,5,0,0,0,-1\n\n"
+                    "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+                    f"Dialogue: 0,0:00:00.00,0:00:01.00,S,,0,0,0,,{sample}\n")
+        raw = subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=1080x600:d=1", "-vf",
+                              "ass=m.ass:fontsdir=.", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+                             capture_output=True, cwd=tmp).stdout
+    img = np.frombuffer(raw, np.uint8)
+    if img.size != 1080 * 600:
+        return None
+    xs = np.nonzero(img.reshape(600, 1080) > 100)[1]
+    return int(xs.max() - xs.min()) if xs.size else None
+
+
+def measure_font_scale(font_file, family, bold):
+    """Size factor so an uploaded font fills a caption line like the default font does."""
+    try:
+        ref = text_width(FONT_FILE, FONT_NAME, 1)
+        mine = text_width(font_file, family, bold)
+        return round(min(2.5, max(0.6, ref / mine)), 2) if ref and mine else 1.0
+    except Exception:  # measuring is a nicety; never block the edit on it
+        return 1.0
+
+
+def resolve_font(opts, assets):
+    """(file, family, bold, size factor) for the chosen caption font."""
+    if opts.get("caption_font") == "custom" and assets.get("font"):
+        try:
+            family, weight = font_info(assets["font"])
+            if family:
+                bold = int(weight >= 600)
+                return assets["font"], family, bold, measure_font_scale(assets["font"], family, bold)
+        except (OSError, ValueError, KeyError, IndexError):
+            pass
+    file, family, _, bold, scale = FONTS.get(opts.get("caption_font"), FONTS["qatar"])
+    return os.path.join(HERE, "fonts", file), family, bold, scale
 
 FILLERS = {
     "um", "umm", "uh", "uhh", "uhm", "er", "erm", "ah", "hmm", "mm",
@@ -72,6 +167,7 @@ DEFAULT_OPTIONS = {
     # captions
     "captions": True,
     "caption_color": "orange",
+    "caption_font": "qatar",  # key of FONTS, or "custom" with an uploaded font
     "caption_size": "medium",
     "caption_position": "auto",  # auto (avoid face/body) / lower / middle / top
     "highlight_word": True,
@@ -453,7 +549,9 @@ def ass_escape(text):
 def ass_header(w, h, opts):
     text, box, _, _ = PALETTES.get(opts["caption_color"], PALETTES["orange"])
     k = min(w, h) / 1080
-    size = int(CAPTION_SIZES.get(opts["caption_size"], 92) * k)
+    family, bold, scale = opts.get("_font") or (FONT_NAME, 1, 1.0)
+    fk = k * scale  # font sizes only; boxes, margins and outlines keep k
+    size = int(CAPTION_SIZES.get(opts["caption_size"], 92) * fk)
     pos = opts["caption_position"]
     align, margin = {"top": (8, int(0.17 * h)), "middle": (5, 0)}.get(pos, (2, int(0.32 * h)))
     # top hook sits below the logo area (logo: 5% from top, ~17% of the short side tall)
@@ -461,14 +559,14 @@ def ass_header(w, h, opts):
     en_margin = int(0.12 * h) if pos != "lower" else int(0.32 * h) - int(size * 1.9)
     end_text = "&H00FFFFFF" if opts["caption_color"] == "white" else text  # white palette gets a dark end card
     styles = [
-        f"Caption,{FONT_NAME},{size},{text},{text},{box},{box},1,0,0,0,100,100,0,0,3,{int(14 * k)},0,{align},80,80,{margin},-1",
-        f"Hook,{FONT_NAME},{int(84 * k)},{box},{box},{text},{text},1,0,0,0,100,100,0,0,3,{int(22 * k)},0,{hook_align},80,80,{hook_margin},-1",
-        f"English,{FONT_NAME},{int(size * 0.58)},&H00FFFFFF,&H00FFFFFF,&H70000000,&H70000000,1,0,0,0,100,100,0,0,3,{int(10 * k)},0,2,90,90,{en_margin},-1",
-        f"Thumb,{FONT_NAME},{int(128 * k)},{text},{text},{box},{box},1,0,0,0,100,100,0,0,3,{int(26 * k)},0,2,70,70,{int(0.2 * h)},-1",
-        f"HL,{FONT_NAME},{int(size * 1.6)},{text},{text},&H00000000,&H64000000,1,0,0,0,100,100,0,0,1,0,{int(4 * k)},5,40,40,0,-1",
-        f"HLSmall,{FONT_NAME},{int(size * 0.62)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,{int(4 * k)},0,5,60,60,0,-1",
-        f"EndTitle,{FONT_NAME},{int(110 * k)},{end_text},{end_text},&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,0,0,5,60,60,0,-1",
-        f"EndContact,{FONT_NAME},{int(64 * k)},{end_text},{end_text},&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,0,0,2,60,60,{int(0.3 * h)},-1",
+        f"Caption,{family},{size},{text},{text},{box},{box},{bold},0,0,0,100,100,0,0,3,{int(14 * k)},0,{align},80,80,{margin},-1",
+        f"Hook,{family},{int(84 * fk)},{box},{box},{text},{text},{bold},0,0,0,100,100,0,0,3,{int(22 * k)},0,{hook_align},80,80,{hook_margin},-1",
+        f"English,{family},{int(size * 0.58)},&H00FFFFFF,&H00FFFFFF,&H70000000,&H70000000,{bold},0,0,0,100,100,0,0,3,{int(10 * k)},0,2,90,90,{en_margin},-1",
+        f"Thumb,{family},{int(128 * fk)},{text},{text},{box},{box},{bold},0,0,0,100,100,0,0,3,{int(26 * k)},0,2,70,70,{int(0.2 * h)},-1",
+        f"HL,{family},{int(size * 1.6)},{text},{text},&H00000000,&H64000000,{bold},0,0,0,100,100,0,0,1,0,{int(4 * k)},5,40,40,0,-1",
+        f"HLSmall,{family},{int(size * 0.62)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,{bold},0,0,0,100,100,0,0,1,{int(4 * k)},0,5,60,60,0,-1",
+        f"EndTitle,{family},{int(110 * fk)},{end_text},{end_text},&H00000000,&H00000000,{bold},0,0,0,100,100,0,0,1,0,0,5,60,60,0,-1",
+        f"EndContact,{family},{int(64 * fk)},{end_text},{end_text},&H00000000,&H00000000,{bold},0,0,0,100,100,0,0,1,0,0,2,60,60,{int(0.3 * h)},-1",
     ]
     # Encoding -1 = full Unicode bidi; otherwise libass mimics VSFilter and lays Arabic words out left-to-right
     return (f"[Script Info]\nScriptType: v4.00+\nPlayResX: {w}\nPlayResY: {h}\nWrapStyle: 0\n\n"
@@ -693,6 +791,7 @@ def highlight_events(hl, x, y, opts, w, h, context=""):
     size = CAPTION_SIZES.get(opts["caption_size"], 92) * k * 1.6
     word = hl["word"] if hl["kind"] != "number" else format_number(hl["number"], hl["word"])
     size = min(size, 0.78 * w / max(1, len(word) * 0.55))
+    fs = int(size * (opts.get("_font") or (0, 0, 1.0))[2])  # drawn size; the box is laid out with `size`
     bw, bh = len(word) * size * 0.55 + size * 0.9, size * 1.45
     s0, s1 = hl["start"], hl["end"]
     slam = "\\fscx20\\fscy20\\t(0,160,\\fscx112\\fscy112)\\t(160,270,\\fscx100\\fscy100)\\frz-4\\t(0,270,\\frz0)\\fad(0,220)"
@@ -703,12 +802,12 @@ def highlight_events(hl, x, y, opts, w, h, context=""):
         for i in range(steps):
             a, b = s0 + 0.05 * i, s0 + 0.05 * (i + 1)
             val = hl["number"] * (1 - (1 - (i + 1) / steps) ** 3)  # ease-out count up
-            tags = f"\\an5\\pos({int(x)},{int(y)})\\fs{int(size)}" + (slam.replace("\\fad(0,220)", "") if i == 0 else "")
+            tags = f"\\an5\\pos({int(x)},{int(y)})\\fs{fs}" + (slam.replace("\\fad(0,220)", "") if i == 0 else "")
             ev.append(dialogue(a, b if i < steps - 1 else s1, "HL",
                                f"{{{tags}{chr(92)}fad(0,{220 if i == steps - 1 else 0})}}"
                                + ass_escape(format_number(val, hl["word"])), 4))
     else:
-        ev.append(dialogue(s0, s1, "HL", f"{{\\an5\\pos({int(x)},{int(y)})\\fs{int(size)}{slam}}}" + ass_escape(word), 4))
+        ev.append(dialogue(s0, s1, "HL", f"{{\\an5\\pos({int(x)},{int(y)})\\fs{fs}{slam}}}" + ass_escape(word), 4))
     import math
     for i in range(8):
         ang = math.radians(22.5 + 45 * i)
@@ -852,6 +951,7 @@ def section_events(sec, y, opts, w, h):
     k = min(w, h) / 1080
     size = int(CAPTION_SIZES.get(opts["caption_size"], 92) * k * 1.05)
     bw, bh = max(len(sec["label"]) * size * 0.58, len(sec["sub"]) * size * 0.27) + size * 1.2, size * 2.1
+    scale = (opts.get("_font") or (0, 0, 1.0))[2]
     x_in, x_out = w + bw / 2, w - bw / 2 - 30 * k
 
     def mv(yy):  # slide in from the right edge, fade out at the end
@@ -860,9 +960,9 @@ def section_events(sec, y, opts, w, h):
     return [
         dialogue(sec["start"], sec["end"], "HL", f"{{\\an5{mv(y)}\\p1\\bord0\\shad{int(5 * k)}\\1c{box_c}}}"
                  + rounded_rect(bw, bh, bh * 0.22), 5),
-        dialogue(sec["start"], sec["end"], "HL", f"{{\\an5{mv(y - bh * 0.18)}\\fs{size}\\1c{text_c}\\bord0\\shad0}}"
+        dialogue(sec["start"], sec["end"], "HL", f"{{\\an5{mv(y - bh * 0.18)}\\fs{int(size * scale)}\\1c{text_c}\\bord0\\shad0}}"
                  + ass_escape(sec["label"]), 6),
-        dialogue(sec["start"] + 0.15, sec["end"], "HL", f"{{\\an5{mv(y + bh * 0.26)}\\fs{int(size * 0.48)}"
+        dialogue(sec["start"] + 0.15, sec["end"], "HL", f"{{\\an5{mv(y + bh * 0.26)}\\fs{int(size * 0.48 * scale)}"
                  f"\\1c{text_c}\\alpha&H30&\\bord0\\shad0}}" + ass_escape(sec["sub"]), 6),
         dialogue(sec["start"], sec["end"], "HL", f"{{\\an5{mv(y - bh / 2 + 8 * k)}\\p1\\bord0\\shad0\\1c{hl_c}"
                  f"\\fscx0\\t(250,600,\\fscx100)}}" + rounded_rect(bw * 0.4, 8 * k, 4 * k), 6),
@@ -1826,6 +1926,10 @@ def render_plan(job_dir, plan, options, assets=None, edits=None, preview=False, 
     os.makedirs(os.path.join(job_dir, "fonts"), exist_ok=True)
     if os.path.exists(FONT_FILE):
         shutil.copy(FONT_FILE, os.path.join(job_dir, "fonts"))
+    font_file, family, bold, scale = resolve_font(opts, assets)
+    if os.path.exists(font_file):
+        shutil.copy(font_file, os.path.join(job_dir, "fonts"))
+    opts["_font"] = (family, bold, scale)
     if opts["music"] and opts["music_source"] in library.TRACKS:
         emit(f"موسيقى من المكتبة: {library.TRACKS[opts['music_source']]}")
         assets["music"] = library.ensure_track(opts["music_source"], LIB_DIR)
@@ -1921,11 +2025,13 @@ if __name__ == "__main__":
     ap.add_argument("--out", default="workspace/jobs/cli")
     ap.add_argument("--music")
     ap.add_argument("--logo")
+    ap.add_argument("--font", help="custom .ttf/.otf (with --options '{\"caption_font\": \"custom\"}')")
     ap.add_argument("--broll", nargs="*", default=[])
     ap.add_argument("--options", default="{}", help="JSON options override")
     a = ap.parse_args()
     absp = os.path.abspath
     print(json.dumps(process(absp(a.out), [absp(p) for p in a.inputs], json.loads(a.options),
                              {"music": a.music and absp(a.music), "logo": a.logo and absp(a.logo),
+                              "font": a.font and absp(a.font),
                               "broll": [absp(p) for p in a.broll]}),
                      ensure_ascii=False, indent=2))
