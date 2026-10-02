@@ -19,6 +19,7 @@ from collections import Counter
 FPS = 30
 HERE = os.path.dirname(os.path.abspath(__file__))
 FACE_MODEL = os.path.join(HERE, "models", "face_detection_yunet_2023mar.onnx")
+EMOJI_DIR = os.path.join(HERE, "assets", "emoji")  # Twemoji, CC-BY 4.0
 WHISPER_DIR = os.path.join(HERE, "models", "whisper")  # filled by tools/make_portable.py for offline PCs
 FONT_FILE = os.path.join(HERE, "fonts", "Qatar2022Arabic-Bold.ttf")
 FONT_NAME = "Qatar2022 Arabic"
@@ -87,6 +88,10 @@ DEFAULT_OPTIONS = {
     "music": False,
     "sfx": False,
     "color": True,
+    "color_look": "auto",  # none / auto / warm / cool / cinematic / bw / vivid / vintage
+    "transition": "none",  # none / fade / flash / zoom / whip / mix
+    "stickers": False,
+    "section_titles": False,
     # b-roll
     "broll": False,
     "pexels": False,
@@ -710,12 +715,180 @@ def punch_zoom_filter(windows, w, h):
             f":y='clip(ih*{fy_e}-ih/zoom/2,0,ih-ih/zoom)':d=1:s={w}x{h}:fps={FPS}")
 
 
+# ---------------------------------------------------------------- stickers & section titles
+
+EMOJI = {
+    "1f525": "نار قوي ناري حماس fire hot",
+    "1f4a1": "فكره نصيحه اقتراح حل idea tip",
+    "1f4b0": "فلوس مال سعر اسعار ربح ريال دولار درهم money price",
+    "2705": "صح صحيح تمام اكيد نعم correct yes",
+    "274c": "غلط خطا غلطه wrong",
+    "26a0": "انتبه تحذير خطر احذر خطير warning careful",
+    "2764": "حب قلب احب love",
+    "1f602": "ضحك مضحك funny",
+    "23f0": "وقت ساعه دقيقه دقايق time",
+    "1f334": "نخل نخيل نخله نخلات palm",
+    "1f331": "زراعه نبات بذر بذور شجر شجره مزرعه plant farm",
+    "1f4a7": "ماء ماي مويه مي ري سقي water",
+    "2600": "شمس صيف حر sun summer",
+    "2744": "برد شتاء شتا ثلج winter cold",
+    "2708": "سفر طياره رحله طيران travel flight",
+    "1f3e0": "بيت منزل home house",
+    "1f697": "سياره car",
+    "1f4f1": "جوال تلفون هاتف موبايل phone",
+    "1f4da": "تعلم كتاب دراسه درس learn book",
+    "1f3c6": "نجاح فوز بطل success win",
+    "1f680": "سريع صاروخ انطلاق fast launch",
+    "2753": "سؤال ليش لماذا question",
+    "1f4af": "١٠٠ 100 بالميه",
+    "2b50": "مميز نجمه best star",
+    "1f4aa": "قوه عضلات strong",
+    "1f914": "تفكير فكر think",
+    "1f631": "صدمه واو مستحيل wow",
+    "1f604": "سعيد فرح فرحه happy",
+    "1f4c8": "زياده نمو ارتفاع growth",
+    "1f381": "هديه مجاني مجانا gift free",
+    "1f4cd": "مكان موقع location",
+    "1f37d": "اكل طعام اكله food",
+    "1f44d": "حلو ممتاز رائع جميل good great",
+    "1f64f": "شكرا الحمدلله دعاء thanks",
+    "1f54c": "مسجد صلاه رمضان",
+    "1f440": "شوف شوفوا انظر look",
+    "1f389": "مبروك احتفال عيد congrats",
+}
+EMOJI_INDEX = {stem(k): code for code, keys in EMOJI.items() for k in keys.split()}
+
+ORDINALS = {"اول": 1, "اولي": 1, "اولا": 1, "ثاني": 2, "ثانيه": 2, "ثانيا": 2, "ثالث": 3, "ثالثه": 3, "ثالثا": 3,
+            "رابع": 4, "رابعه": 4, "رابعا": 4, "خامس": 5, "خامسه": 5, "خامسا": 5, "سادس": 6, "سادسه": 6,
+            "سادسا": 6, "سابع": 7, "سابعه": 7, "ثامن": 8, "تاسع": 9, "عاشر": 10, "اخير": 0, "اخيره": 0, "اخيرا": 0}
+COUNTS = {"واحد": 1, "اثنين": 2, "اثنان": 2, "ثلاثه": 3, "اربعه": 4, "خمسه": 5, "سته": 6, "سبعه": 7, "one": 1,
+          "two": 2, "three": 3, "four": 4, "five": 5}
+SECTION_NOUNS = {"خطوه", "نقطه", "طريقه", "سبب", "نصيحه", "قاعده", "مرحله", "سر", "غلطه", "خطا", "step", "tip"}
+STANDALONE = {"اولا", "ثانيا", "ثالثا", "رابعا", "خامسا", "اخيرا"}
+
+
+def emoji_for(text):
+    t = stem(text)
+    if len(t) < 2:
+        return None
+    if t in EMOJI_INDEX:
+        return EMOJI_INDEX[t]
+    for key, code in EMOJI_INDEX.items():
+        if len(key) >= 4 and len(t) >= 4 and (t.startswith(key) or key.startswith(t)):
+            return code
+    return None
+
+
+def find_stickers(words, highlights, content, busy=()):
+    per = max(1, int(content // 6))
+    hl_words = {hl["index"] for hl in highlights}
+    cands = []
+    for i, w in enumerate(words):
+        code = emoji_for(w["text"])
+        if code and os.path.exists(os.path.join(EMOJI_DIR, f"{code}.png")):
+            cands.append((0 if i in hl_words else 1, w["start"], i, code))
+    picked = []
+    for _, start, i, code in sorted(cands):
+        start = max(0.0, start - 0.05)
+        if start + 1.5 > content or any(abs(start - p["start"]) < 4 for p in picked) \
+                or any(start < b and start + 1.5 > a for a, b in busy):
+            continue
+        picked.append({"start": start, "end": start + 1.5, "index": i, "code": code})
+        if len(picked) >= per:
+            break
+    return sorted(picked, key=lambda p: p["start"])
+
+
+def find_sections(words):
+    """'الخطوة الثانية', 'النقطة رقم ٣', 'أولاً', 'أخيراً'... -> titled sections."""
+    stems = [stem(w["text"]) for w in words]
+    out = []
+    for i, t in enumerate(stems):
+        label, num = None, None
+        if t in STANDALONE:
+            label = words[i]["text"]
+        elif t in SECTION_NOUNS and i + 1 < len(words):
+            nxt = stems[i + 1]
+            if nxt == "رقم" and i + 2 < len(words):
+                nxt = stems[i + 2]
+            num = ORDINALS.get(nxt, COUNTS.get(nxt, parse_number(nxt)))
+            if num is not None:
+                noun = re.sub(r"[^\w\s]", "", words[i]["text"])
+                label = f"{noun} {format_number(num, '٠')}" if num else words[i]["text"] + " " + words[i + 1]["text"]
+        if label and (not out or words[i]["start"] - out[-1]["start"] > 4):
+            nxt_words = [w["text"] for w in words[i + 1:i + 7] if stem(w["text"]) not in ORDINALS][:5]
+            out.append({"start": max(0.0, words[i]["start"] - 0.1), "label": label.strip(), "sub": " ".join(nxt_words)})
+    for s in out:
+        s["end"] = s["start"] + 2.6
+    return out
+
+
+def section_events(sec, y, opts, w, h):
+    text_c, box_c, hl_c, _ = PALETTES.get(opts["caption_color"], PALETTES["orange"])
+    k = min(w, h) / 1080
+    size = int(CAPTION_SIZES.get(opts["caption_size"], 92) * k * 1.05)
+    bw, bh = max(len(sec["label"]) * size * 0.58, len(sec["sub"]) * size * 0.27) + size * 1.2, size * 2.1
+    x_in, x_out = w + bw / 2, w - bw / 2 - 30 * k
+
+    def mv(yy):  # slide in from the right edge, fade out at the end
+        return f"\\move({int(x_in)},{int(yy)},{int(x_out)},{int(yy)},0,320)\\fad(0,300)"
+
+    return [
+        dialogue(sec["start"], sec["end"], "HL", f"{{\\an5{mv(y)}\\p1\\bord0\\shad{int(5 * k)}\\1c{box_c}}}"
+                 + rounded_rect(bw, bh, bh * 0.22), 5),
+        dialogue(sec["start"], sec["end"], "HL", f"{{\\an5{mv(y - bh * 0.18)}\\fs{size}\\1c{text_c}\\bord0\\shad0}}"
+                 + ass_escape(sec["label"]), 6),
+        dialogue(sec["start"] + 0.15, sec["end"], "HL", f"{{\\an5{mv(y + bh * 0.26)}\\fs{int(size * 0.48)}"
+                 f"\\1c{text_c}\\alpha&H30&\\bord0\\shad0}}" + ass_escape(sec["sub"]), 6),
+        dialogue(sec["start"], sec["end"], "HL", f"{{\\an5{mv(y - bh / 2 + 8 * k)}\\p1\\bord0\\shad0\\1c{hl_c}"
+                 f"\\fscx0\\t(250,600,\\fscx100)}}" + rounded_rect(bw * 0.4, 8 * k, 4 * k), 6),
+    ]
+
+
 # ---------------------------------------------------------------- rendering
+
+LOOKS = {
+    "none": None,
+    "auto": "eq=contrast=1.06:saturation=1.18:brightness=0.015:gamma=0.98",
+    "warm": "colorbalance=rs=0.06:gs=0.01:bs=-0.06:rm=0.05:bm=-0.04,eq=saturation=1.12:contrast=1.04",
+    "cool": "colorbalance=rs=-0.05:bs=0.07:rm=-0.03:bm=0.05,eq=saturation=1.05:contrast=1.04",
+    "cinematic": "colorbalance=rs=-0.06:gs=-0.01:bs=0.08:rh=0.07:gh=0.02:bh=-0.07,"
+                 "eq=contrast=1.12:saturation=0.95:gamma=0.96,vignette=PI/5",
+    "bw": "hue=s=0,eq=contrast=1.15:brightness=0.02",
+    "vivid": "eq=saturation=1.45:contrast=1.1,unsharp=5:5:0.6",
+    "vintage": "curves=preset=vintage,eq=saturation=0.85,vignette=PI/4,noise=alls=6:allf=t",
+}
+TRANSITIONS = ("fade", "flash", "zoom", "whip")
+
+
+def transition_filters(kind, n, count, dur, w, h):
+    """Entrance/exit effects on one part, so cuts get a transition without changing the timeline."""
+    mixed = kind == "mix"
+    if mixed:
+        kind = TRANSITIONS[n % len(TRANSITIONS)]
+    first, last = n == 0, n == count - 1
+    # in a mix, only dip to black when the next cut fades back in (a black dip into a white flash looks broken)
+    last = last or (mixed and TRANSITIONS[(n + 1) % len(TRANSITIONS)] != "fade")
+    f = []
+    if kind == "fade":
+        f += [] if first else ["fade=t=in:st=0:d=0.12"]
+        f += [] if last else [f"fade=t=out:st={max(0.0, dur - 0.12):.2f}:d=0.12"]
+    elif kind == "flash" and not first:
+        f.append("fade=t=in:st=0:d=0.18:color=white")
+    elif kind == "zoom" and not first:
+        f.append(f"zoompan=z='if(lt(it,0.3),1.15-0.15*it/0.3,1)':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2'"
+                 f":d=1:s={w}x{h}:fps={FPS}")
+    elif kind == "whip" and not first:
+        f.append(f"zoompan=z='1+0.14*(1-min(1,it/0.25))':x='(iw-iw/zoom)*(1-min(1,it/0.25))'"
+                 f":y='ih/2-ih/zoom/2':d=1:s={w}x{h}:fps={FPS}")
+    return f + (["format=yuv420p"] if f else [])
+
 
 def video_filter(opts, crop):
     vf = list(crop)
-    if opts["color"]:
-        vf.append("eq=contrast=1.06:saturation=1.18:brightness=0.015:gamma=0.98")
+    look = LOOKS.get(opts.get("color_look") or ("auto" if opts["color"] else "none"))
+    if look:
+        vf.append(look)
     vf += [f"fps={FPS}", "setsar=1", "format=yuv420p"]
     return ",".join(vf)
 
@@ -962,7 +1135,15 @@ def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, track
             cmd += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-shortest"]
         crop, seg_faces = reframe(tracks.get(seg["file"]), seg, w, h, zoom, opts["auto_reframe"])
         faces += [(offset + t, b) for t, b in seg_faces]
-        cmd += ["-vf", video_filter(opts, crop), "-af", "aresample=48000,aformat=channel_layouts=stereo",
+        vf = video_filter(opts, crop + [])
+        trans = transition_filters(opts["transition"], n, len(segments), seg_len(seg), w, h)
+        if trans:
+            vf += "," + ",".join(trans)
+        d = seg_len(seg)
+        # 15 ms audio fades at every cut: no clicks where the waveform is chopped
+        af = (f"aresample=48000,aformat=channel_layouts=stereo,afade=t=in:d=0.015,"
+              f"afade=t=out:st={max(0.0, d - 0.015):.3f}:d=0.015")
+        cmd += ["-vf", vf, "-af", af,
                 *ENCODE, os.path.join(parts_dir, f"{n:04d}.mp4")]
         run(cmd)
         listing.append(f"file '{prefix}_parts/{n:04d}.mp4'")  # relative: avoids Windows path issues
@@ -1056,6 +1237,47 @@ def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, track
                            ["upper", "top", "lower", "bottom"], avoid=busy) if faces else "upper"
         hl["y"] = min(max(ZONES[zone] * h, 0.08 * h + half_h), 0.88 * h - half_h)  # keep clear of the app UI
         hl["face"] = (faces_in(faces, hl["start"], hl["end"]) or [(w / 2, h * 0.4, 0, 0)])[0]
+
+    # section titles ("الخطوة ٢"): slide in at a spot clear of the face and of the captions on screen
+    sections = find_sections(words) if opts["section_titles"] and words else []
+    for sec in sections:
+        busy = [(y, hh) for s0, e0, y, hh in cap_spots if s0 < sec["end"] and e0 > sec["start"]]
+        half_h = cap_size * 1.15
+        zone = choose_zone(faces_in(faces, sec["start"], sec["end"]), half_h, w * 0.45, w, h,
+                           ["top", "upper", "bottom", "lower"], avoid=busy) if faces else "top"
+        sec["y"] = min(max(ZONES[zone] * h, 0.07 * h + half_h), 0.88 * h - half_h)
+
+    # emoji stickers next to the words they illustrate, on the highlight card when there is one
+    stickers, size_st = [], int(0.2 * min(w, h))
+    if opts["stickers"] and words:
+        default_y = {"top": 0.2, "middle": 0.5}.get(opts["caption_position"], 0.64) * h
+        stickers = find_stickers(words, highlights, content, [(x["start"], x["end"]) for x in sections])
+        for n, st in enumerate(stickers):
+            hl = next((x for x in highlights if x["index"] == st["index"] and x["kind"] != "image"), None)
+            if hl:
+                fs = min(cap_size * 1.6, 0.78 * w / max(1, len(hl["word"]) * 0.55))
+                bw, bh = len(hl["word"]) * fs * 0.55 + fs * 0.9, fs * 1.45
+                spots = [(w / 2 + bw / 2 - size_st * 0.1, hl["y"] - cap_size * 0.3 - bh / 2 - size_st * 0.15)]
+            else:
+                cy, ch = next(((y, hh) for s0, e0, y, hh in cap_spots if s0 <= st["start"] + 0.2 <= e0 + 0.3),
+                              (default_y, cap_size * 0.75))
+                chunk = next((c for c in shown if c["start"] <= st["start"] + 0.2 <= c["end"] + 0.3), None)
+                hw = text_block(chunk["text"], cap_size, w)[1] if chunk else w * 0.3
+                side = 1 if n % 2 == 0 else -1
+                above, below = cy - ch - size_st * 0.55, cy + ch + size_st * 0.55
+                spots = [(w / 2 + side * hw * 0.8, above), (w / 2 - side * hw * 0.8, above),
+                         (w / 2 + side * hw * 0.8, below), (w * 0.82, h * 0.22), (w * 0.18, h * 0.22)]
+            boxes = faces_in(faces, st["start"], st["end"])
+
+            def clear(x, y):
+                inside = size_st / 2 <= x <= w - size_st / 2 and size_st / 2 <= y <= h - size_st / 2
+                return inside and not any(abs(x - fx) < (size_st + fw) / 2 + 20 and abs(y - fy) < (size_st + fh) / 2 + 20
+                                          for fx, fy, fw, fh in boxes)
+            st["x"], st["y"] = next((p for p in spots if clear(*p)), spots[0])
+            st["x"] = min(max(st["x"], size_st / 2), w - size_st / 2)
+            st["y"] = min(max(st["y"], size_st / 2), h - size_st / 2)
+
+    has_ass = has_ass or bool(sections)
     if has_ass:
         with open(os.path.join(job_dir, f"{prefix}.ass"), "w", encoding="utf-8") as f:
             f.write(ass_header(w, h, opts))
@@ -1073,6 +1295,8 @@ def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, track
                                   + ass_escape(e["text"]), 1) for i, e in enumerate(en_items))
             if hook:
                 f.write(dialogue(0, min(3.0, content), "Hook", hook_place + "{\\fad(0,250)}" + ass_escape(hook), 2))
+            for sec in sections:
+                f.writelines(section_events(sec, sec["y"], opts, w, h))
     if chunks:
         write_srt(os.path.join(job_dir, f"{prefix}.srt"), chunks)
     if en_items:
@@ -1139,6 +1363,17 @@ def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, track
     if has_ass:
         vchain.append(f"[{v}]ass={prefix}.ass:fontsdir=fonts[vs]")
         v = "vs"
+    for j, st in enumerate(stickers):
+        d, t0, r = st["end"] - st["start"], st["start"], int(size_st * 1.42)
+        src = add_input("-loop", "1", "-framerate", str(FPS), "-t", f"{d:.2f}", "-i",
+                        os.path.join(EMOJI_DIR, st["code"] + ".png"))
+        vchain.append(f"[{src}:v]scale={size_st}:{size_st},format=rgba,rotate='0.14*sin(2*PI*1.6*t)':c=none"
+                      f":ow={r}:oh={r},fade=in:st=0:d=0.15:alpha=1,fade=out:st={d - 0.3:.2f}:d=0.3:alpha=1,"
+                      f"setpts=PTS-STARTPTS+{t0:.2f}/TB[sk{j}]")
+        vchain.append(f"[{v}][sk{j}]overlay=x={int(st['x'] - r / 2)}:y='{int(st['y'] - r / 2)}"
+                      f"+80*pow(max(0,1-(t-{t0:.2f})/0.3),2)':eof_action=pass"
+                      f":enable='between(t,{t0:.2f},{t0 + d:.2f})'[vk{j}]")
+        v = f"vk{j}"
     if opts["logo"] and assets.get("logo"):
         src = add_input("-i", assets["logo"])
         m = int(min(w, h) * 0.045)
@@ -1162,6 +1397,7 @@ def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, track
     a = "a0"
     if opts["sfx"]:
         hits = sorted(set(round(t, 2) for t in boundaries + [b["start"] for b in brolls] + [hl["start"] for hl in highlights]
+                          + [x["start"] for x in sections]
                           + ([content] if end_card else [])))
         hits = [t for i, t in enumerate(hits) if t > 0.3 and (i == 0 or t - hits[i - 1] > 1.0)]
         if hits:
@@ -1202,6 +1438,8 @@ def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, track
         "seconds": round(total / speed, 2),
         "broll": len(brolls),
         "highlights": [hl["word"] for hl in highlights],
+        "stickers": len(stickers),
+        "sections": [{"t": round(x["start"] / speed, 1), "label": x["label"]} for x in sections],
     }
 
 

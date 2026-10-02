@@ -134,6 +134,11 @@
           <label class="switch"><input type="checkbox" data-opt="cut_silences" checked><span></span></label></div>
         <div class="row"><div>تتبّع الوجه وتوسيط الشخص<span class="hint">القص يلحق وجهك بدل ما يقص من النص</span></div>
           <label class="switch"><input type="checkbox" data-opt="auto_reframe" checked><span></span></label></div>
+        <label class="small">الانتقال بين اللقطات</label>
+        <select data-opt="transition">
+          <option value="none" selected>قص مباشر</option><option value="fade">تلاشي</option><option value="flash">فلاش أبيض</option>
+          <option value="zoom">زوم دخول</option><option value="whip">سحبة سريعة</option><option value="mix">منوّع</option>
+        </select>
         <div class="row"><div>زوم تلقائي بين اللقطات</div>
           <label class="switch"><input type="checkbox" data-opt="zoom_cuts" checked><span></span></label></div>
         <div class="row"><div>تقطيع الفيديو الطويل لعدة ريلز<span class="hint">فيديو 4 دقايق يصير عدة ريلز، يقص بين الجمل</span></div>
@@ -214,8 +219,12 @@
         <div class="sub" id="thumbSub"><input type="text" data-opt="thumbnail_text" placeholder="عنوان الغلاف (اتركه فارغ ويستخدم الـ Hook أو أول جملة)"></div>
         <div class="row"><div>شريط تقدّم فوق الفيديو</div>
           <label class="switch"><input type="checkbox" data-opt="progress_bar"><span></span></label></div>
-        <div class="row"><div>تصحيح الألوان تلقائياً</div>
-          <label class="switch"><input type="checkbox" data-opt="color" checked><span></span></label></div>
+        <label class="small">فلتر الألوان</label>
+        <select data-opt="color_look">
+          <option value="auto" selected>تصحيح تلقائي خفيف</option><option value="none">بدون</option>
+          <option value="warm">دافئ</option><option value="cool">بارد</option><option value="cinematic">سينمائي</option>
+          <option value="vivid">ألوان قوية</option><option value="vintage">قديم (فينتج)</option><option value="bw">أبيض وأسود</option>
+        </select>
       </div>
     </details>
 
@@ -235,6 +244,10 @@
     <details open>
       <summary>✨ موشن على أهم الكلام</summary>
       <div class="body">
+        <div class="row"><div>ستيكرات إيموجي 🔥💡🌴<span class="hint">تطلع جنب الكلمات اللي لها إيموجي (نار، فكرة، فلوس، ماء، نخيل، سفر…)</span></div>
+          <label class="switch"><input type="checkbox" data-opt="stickers"><span></span></label></div>
+        <div class="row"><div>عناوين الأقسام<span class="hint">لما تقول «الخطوة الثانية» أو «أولاً» أو «النقطة رقم ٣» يطلع عنوان على الشاشة</span></div>
+          <label class="switch"><input type="checkbox" data-opt="section_titles"><span></span></label></div>
         <div class="row"><div>موشن على الكلمات المهمة<span class="hint">الأرقام، والكلمات اللي تأكد عليها بصوتك، واللي بعد «أهم / السر / انتبه»، واللي تتكرر</span></div>
           <label class="switch"><input type="checkbox" data-opt="motion_highlights" data-sub="hlSub"><span></span></label></div>
         <div class="sub" id="hlSub">
