@@ -189,6 +189,11 @@
         <div class="row"><div>نص جذّاب في البداية (Hook)<span class="hint">أول 3 ثواني</span></div>
           <label class="switch"><input type="checkbox" data-opt="text_hook" data-sub="hookSub"><span></span></label></div>
         <div class="sub" id="hookSub"><input type="text" data-opt="hook_text" placeholder="اتركه فارغاً لاستخدام أول جملة تقولها"></div>
+        <label class="small">سرعة تفريغ الكلام</label>
+        <select data-opt="whisper_model">
+          <option value="base">سريع (دقة أقل)</option><option value="small" selected>عادي</option>
+          <option value="medium">دقيق (بطيء جداً على المعالج)</option>
+        </select>
         <label class="small">لغة الكلام</label>
         <select data-opt="language"><option value="">اكتشاف تلقائي</option><option value="ar" selected>العربية</option><option value="en">English</option></select>
       </div>

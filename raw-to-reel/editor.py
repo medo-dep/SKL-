@@ -205,22 +205,33 @@ def _transcribe(path, model_name, lang, log, translate):
     if WhisperModel:
         local = {"download_root": WHISPER_DIR} if os.path.isdir(WHISPER_DIR) else {}
 
+        def progress(label, segs):
+            """Yield segments while logging how far along the audio we are (every ~10%)."""
+            total, shown = len(audio) / 16000, -1
+            for seg in segs:
+                pct = int(min(1.0, seg.end / max(total, 1)) * 10)
+                if pct > shown:
+                    shown = pct
+                    log(f"  {label}: {clock(seg.end)} من {clock(total)} ({pct * 10}%)", 0.05 + 0.2 * pct / 10)
+                yield seg
+
         def run_on(device):
+            log("  تحميل نموذج التفريغ...")
             model = WhisperModel(model_name, device=device, compute_type="int8", **local)
             segments, _ = model.transcribe(audio, language=lang, word_timestamps=True)
             words = [{"start": w.start, "end": w.end, "text": w.word.strip()}
-                     for seg in segments for w in (seg.words or [])]
+                     for seg in progress("تفريغ", segments) for w in (seg.words or [])]
             english = None
             if translate:
                 log("ترجمة الكلام للإنجليزي...")
                 segs, _ = model.transcribe(audio, language=lang, task="translate")
-                english = [{"start": s.start, "end": s.end, "text": s.text.strip()} for s in segs]
+                english = [{"start": s.start, "end": s.end, "text": s.text.strip()} for s in progress("ترجمة", segs)]
             return words, english
 
         log(f"تفريغ الصوت بـ faster-whisper ({model_name})... أول مرة ينزّل النموذج وياخذ وقت")
         audio = load_audio(path)
         try:
-            return run_on("auto")
+            return run_on(os.environ.get("RAW2REEL_DEVICE", "auto"))
         except Exception as exc:  # usually missing CUDA DLLs (cublas/cudnn) on NVIDIA laptops
             log(f"⚠️ تعذّر التشغيل على كرت الشاشة ({str(exc)[:120]})، أعيد المحاولة على المعالج...")
             return run_on("cpu")
