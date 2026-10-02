@@ -36,6 +36,8 @@ function saveOptions() {
 
 function syncSubs() {
   document.querySelectorAll("[data-sub]").forEach((el) => $(el.dataset.sub).classList.toggle("show", el.checked));
+  const src = document.querySelector("[data-opt=music_source]");
+  if (src) $("musicPicker").parentElement.style.display = src.value === "upload" ? "" : "none";
 }
 
 document.querySelectorAll("[data-opt]").forEach((el) => el.addEventListener("change", () => { syncSubs(); saveOptions(); }));

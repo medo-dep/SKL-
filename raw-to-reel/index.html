@@ -235,8 +235,19 @@
           <label class="switch"><input type="checkbox" data-opt="studio_sound" checked><span></span></label></div>
         <div class="row"><div>موسيقى خلفية<span class="hint">ارفع ملف موسيقى، ستوضع تحت صوتك تلقائياً</span></div>
           <label class="switch"><input type="checkbox" data-opt="music" data-sub="musicSub"><span></span></label></div>
-        <div class="sub" id="musicSub"><input type="file" id="musicPicker" accept="audio/*"><div class="files" id="musicName"></div></div>
-        <div class="row"><div>مؤثر صوتي (ووش)<span class="hint">عند الزوم وعند لقطات B-roll</span></div>
+        <div class="sub" id="musicSub">
+          <label class="small">مصدر الموسيقى</label>
+          <select data-opt="music_source">
+            <option value="upload">ملف من جهازي</option>
+            <option value="calm">من المكتبة: هادئ</option><option value="upbeat">من المكتبة: حماسي</option>
+            <option value="lofi">من المكتبة: لوفاي</option><option value="inspiring">من المكتبة: ملهم</option>
+          </select>
+          <span class="hint">موسيقى المكتبة مولّدة بالكود، مجانية 100% وبدون حقوق</span>
+          <div style="margin-top:6px"><input type="file" id="musicPicker" accept="audio/*"><div class="files" id="musicName"></div></div>
+          <div class="row"><div>توطى وقت الكلام<span class="hint">ترتفع في السكتات وتنزل تحت صوتك تلقائياً</span></div>
+            <label class="switch"><input type="checkbox" data-opt="music_ducking" checked><span></span></label></div>
+        </div>
+        <div class="row"><div>مؤثرات صوتية<span class="hint">ووش للزوم والـ B-roll، بوب للستيكرات، دينق للأرقام، سووش للعناوين</span></div>
           <label class="switch"><input type="checkbox" data-opt="sfx"><span></span></label></div>
       </div>
     </details>

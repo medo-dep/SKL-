@@ -16,10 +16,13 @@ import urllib.parse
 import urllib.request
 from collections import Counter
 
+import library
+
 FPS = 30
 HERE = os.path.dirname(os.path.abspath(__file__))
 FACE_MODEL = os.path.join(HERE, "models", "face_detection_yunet_2023mar.onnx")
 EMOJI_DIR = os.path.join(HERE, "assets", "emoji")  # Twemoji, CC-BY 4.0
+LIB_DIR = os.path.join(HERE, "workspace", "library")  # generated music / sfx cache
 WHISPER_DIR = os.path.join(HERE, "models", "whisper")  # filled by tools/make_portable.py for offline PCs
 FONT_FILE = os.path.join(HERE, "fonts", "Qatar2022Arabic-Bold.ttf")
 FONT_NAME = "Qatar2022 Arabic"
@@ -86,6 +89,8 @@ DEFAULT_OPTIONS = {
     # sound
     "studio_sound": True,
     "music": False,
+    "music_source": "upload",  # upload / calm / upbeat / lofi / inspiring (built-in, generated)
+    "music_ducking": True,
     "sfx": False,
     "color": True,
     "color_look": "auto",  # none / auto / warm / cool / cinematic / bw / vivid / vintage
@@ -1095,15 +1100,6 @@ def render_end_card(job_dir, name, opts, w, h, logo, duration=3.0):
     return f"{name}.mp4"
 
 
-def make_whoosh(job_dir):
-    path = os.path.join(job_dir, "whoosh.wav")
-    if not os.path.exists(path):
-        run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "anoisesrc=d=0.5:c=pink:r=48000:a=0.7",
-             "-af", "highpass=f=350,lowpass=f=5000,afade=t=in:d=0.22:curve=qsin,afade=t=out:st=0.22:d=0.28,"
-                    "aformat=channel_layouts=stereo", path])
-    return path
-
-
 def plan_broll(brolls, duration, reel_no):
     """Evenly spaced cutaways, at least 8s apart, avoiding the first and last 3 seconds."""
     if not brolls or duration < 12:
@@ -1393,26 +1389,48 @@ def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, track
     voice = "anull"
     if opts["studio_sound"]:
         voice = "highpass=f=80,lowpass=f=14000,afftdn=nf=-25,acompressor=threshold=-20dB:ratio=3:attack=5:release=80"
-    achain.append(f"[0:a]{voice}[a0]")
+    # apad to the exact length: amix (duration=first) otherwise drops the voice's last ~0.2 s
+    achain.append(f"[0:a]{voice},apad=whole_dur={total:.3f}[a0]")
     a = "a0"
     if opts["sfx"]:
-        hits = sorted(set(round(t, 2) for t in boundaries + [b["start"] for b in brolls] + [hl["start"] for hl in highlights]
-                          + [x["start"] for x in sections]
-                          + ([content] if end_card else [])))
-        hits = [t for i, t in enumerate(hits) if t > 0.3 and (i == 0 or t - hits[i - 1] > 1.0)]
-        if hits:
-            src = add_input("-i", make_whoosh(job_dir))
-            achain.append(f"[{src}:a]asplit={len(hits)}" + "".join(f"[s{i}]" for i in range(len(hits))))
-            for i, t in enumerate(hits):
-                ms = int(max(0.0, t - 0.2) * 1000)
-                achain.append(f"[s{i}]adelay={ms}|{ms},volume=0.35[d{i}]")
-            achain.append(f"[{a}]" + "".join(f"[d{i}]" for i in range(len(hits)))
-                          + f"amix=inputs={len(hits) + 1}:duration=first:normalize=0[asfx]")
+        # a different sound for each kind of moment, at most one every 0.8 s
+        events = ([(t, "whoosh") for t in boundaries] + [(b["start"], "whoosh") for b in brolls]
+                  + [(hl["start"], "ding" if hl["kind"] == "number" else "swoosh" if hl["kind"] == "image" else "boom")
+                     for hl in highlights]
+                  + [(st["start"], "pop") for st in stickers] + [(x["start"], "swoosh") for x in sections]
+                  + ([(content, "whoosh")] if end_card else []))
+        hits = []
+        for t, name in sorted(events):
+            if t > 0.3 and (not hits or t - hits[-1][0] > 0.8):
+                hits.append((t, name))
+        gain = {"whoosh": 0.35, "swoosh": 0.3, "boom": 0.22, "ding": 0.25, "pop": 0.35, "click": 0.3}
+        lead = {"whoosh": 0.2, "swoosh": 0.15}
+        mixed = []
+        for name in sorted({n for _, n in hits}):
+            times = [t for t, n in hits if n == name]
+            src = add_input("-i", library.ensure_sfx(name, LIB_DIR))
+            achain.append(f"[{src}:a]aformat=sample_rates=48000:channel_layouts=stereo,asplit={len(times)}"
+                          + "".join(f"[{name}{i}]" for i in range(len(times))))
+            for i, t in enumerate(times):
+                ms = int(max(0.0, t - lead.get(name, 0.0)) * 1000)
+                achain.append(f"[{name}{i}]adelay={ms}|{ms},volume={gain[name]}[d{name}{i}]")
+                mixed.append(f"[d{name}{i}]")
+        if mixed:
+            achain.append(f"[{a}]" + "".join(mixed) + f"amix=inputs={len(mixed) + 1}:duration=first:normalize=0[asfx]")
             a = "asfx"
-    if opts["music"] and assets.get("music"):
-        src = add_input("-stream_loop", "-1", "-i", assets["music"])
-        achain.append(f"[{src}:a]volume=0.12,afade=t=in:d=1,afade=t=out:st={max(0.0, total - 1.5):.2f}:d=1.5[m]")
-        achain.append(f"[{a}][m]amix=inputs=2:duration=first:normalize=0[amus]")
+    music = assets.get("music")
+    if opts["music"] and music:
+        src = add_input("-stream_loop", "-1", "-i", music)
+        fades = f"afade=t=in:d=1,afade=t=out:st={max(0.0, total - 1.5):.2f}:d=1.5"
+        if opts["music_ducking"]:
+            # music sits higher in the pauses and dips under the voice while you talk
+            achain.append(f"[{a}]asplit=2[vmain][vkey]")
+            achain.append(f"[{src}:a]aformat=sample_rates=48000:channel_layouts=stereo,volume=0.3,{fades}[mraw]")
+            achain.append("[mraw][vkey]sidechaincompress=threshold=0.02:ratio=12:attack=40:release=600:makeup=1[m]")
+            achain.append("[vmain][m]amix=inputs=2:duration=first:normalize=0[amus]")
+        else:
+            achain.append(f"[{src}:a]aformat=sample_rates=48000:channel_layouts=stereo,volume=0.12,{fades}[m]")
+            achain.append(f"[{a}][m]amix=inputs=2:duration=first:normalize=0[amus]")
         a = "amus"
     tail = [f"atempo={speed}"] if speed != 1.0 else []
     if opts["studio_sound"]:
@@ -1593,6 +1611,9 @@ def render_plan(job_dir, plan, options, assets=None, edits=None, preview=False, 
     os.makedirs(os.path.join(job_dir, "fonts"), exist_ok=True)
     if os.path.exists(FONT_FILE):
         shutil.copy(FONT_FILE, os.path.join(job_dir, "fonts"))
+    if opts["music"] and opts["music_source"] in library.TRACKS:
+        emit(f"موسيقى من المكتبة: {library.TRACKS[opts['music_source']]}")
+        assets["music"] = library.ensure_track(opts["music_source"], LIB_DIR)
     for opt, asset, label in (("music", "music", "موسيقى"), ("logo", "logo", "شعار")):
         if opts[opt] and not assets.get(asset):
             emit(f"⚠️ مفعّل «{label}» بس ما رفعت ملف، بيتم التخطي")
