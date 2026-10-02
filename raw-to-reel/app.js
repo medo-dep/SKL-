@@ -343,7 +343,11 @@ function showResult(id, r) {
         ${link(reel.thumbnail, "🖼️ صورة الغلاف")}
         ${link(reel.srt, "💬 ملف الترجمة SRT")}
         ${link(reel.srt_en, "🇬🇧 الترجمة الإنجليزية SRT")}
+        ${link(reel.srt_translated, "🌍 الترجمة للغة الثانية SRT")}
+        ${(reel.variants || []).map((v) => link(v.final, `📐 نسخة ${v.aspect}`) + link(v.thumbnail, `🖼️ غلاف ${v.aspect}`)).join("")}
       </div>
+      ${reel.post ? `<label class="small">📝 نص المنشور</label><textarea class="post" readonly style="min-height:150px">${esc(reel.post)}</textarea>
+        <button class="mini copy">📋 نسخ النص</button>` : ""}
     </div>`).join("");
   $("result").innerHTML = `
     <div style="font-size:13px;margin-top:10px">من ${r.input_seconds} ث ← ${r.output_seconds} ث (${r.segments} لقطة${many ? `، ${r.reels.length} ريلز` : ""})</div>
@@ -353,4 +357,9 @@ function showResult(id, r) {
       ${link(r.edl, "🎬 Timeline لـ DaVinci Resolve (EDL)")}
       ${link(r.resolve_script, "🐍 سكربت فتح المشروع في Resolve")}
     </div>`;
+  $("result").querySelectorAll(".copy").forEach((btn) => (btn.onclick = async () => {
+    const box = btn.previousElementSibling;
+    try { await navigator.clipboard.writeText(box.value); } catch (e) { box.select(); document.execCommand("copy"); }
+    btn.textContent = "✓ انتسخ";
+  }));
 }

@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import urllib.parse
 import urllib.request
 from collections import Counter
@@ -88,6 +89,12 @@ DEFAULT_OPTIONS = {
     "progress_bar": False,
     # sound
     "studio_sound": True,
+    # publishing
+    "also_4x5": False,
+    "also_1x1": False,
+    "also_16x9": False,
+    "post_text": True,
+    "translate_to": "",  # "" or a language code (fr, tr, ur, es...) -> extra .srt via argostranslate
     "music": False,
     "music_source": "upload",  # upload / calm / upbeat / lofi / inspiring (built-in, generated)
     "music_ducking": True,
@@ -286,7 +293,7 @@ def plan_cuts(inputs, opts, log):
         log(f"تحليل {name} ({info['duration']:.1f} ث)")
 
         words = None
-        wants_english = (opts["english_subs"] or (opts["pexels"] and not opts["pexels_keywords"].strip())
+        wants_english = (opts["english_subs"] or opts["translate_to"] or (opts["pexels"] and not opts["pexels_keywords"].strip())
                          or (opts["motion_highlights"] and opts["highlight_images"] and opts["pexels_key"].strip()))
         needs_words = (opts["captions"] or opts["remove_fillers"] or opts["remove_bad_takes"]
                        or opts["text_hook"] or wants_english)
@@ -850,6 +857,93 @@ def section_events(sec, y, opts, w, h):
     ]
 
 
+# ---------------------------------------------------------------- publishing: post text, translations
+
+LANGS = {"fr": "Français", "tr": "Türkçe", "ur": "اردو", "fa": "فارسی", "es": "Español", "de": "Deutsch",
+         "it": "Italiano", "pt": "Português", "ru": "Русский", "id": "Bahasa Indonesia", "hi": "हिन्दी", "zh": "中文"}
+
+
+def sentences_of(words, gap=0.6):
+    out, cur = [], []
+    for w in words:
+        if cur and (w["start"] - cur[-1]["end"] > gap or re.search(r"[.!?؟]$", cur[-1]["text"])):
+            out.append(cur)
+            cur = []
+        if normalize_word(w["text"]) not in FILLERS:
+            cur.append(w)
+    if cur:
+        out.append(cur)
+    return [{"start": c[0]["start"], "text": " ".join(w["text"] for w in c)} for c in out if c]
+
+
+def clock(t):
+    t = int(t)
+    return f"{t // 3600}:{t // 60 % 60:02d}:{t % 60:02d}" if t >= 3600 else f"{t // 60:02d}:{t % 60:02d}"
+
+
+def build_post(words, hook, highlights, sections, stickers, opts, speed):
+    """Caption for Instagram / TikTok / YouTube: title, key points, chapters, contact and hashtags."""
+    sents = sentences_of(words)
+    title = (opts["thumbnail_text"].strip() or hook
+             or (" ".join(sents[0]["text"].split()[:10]) if sents else ""))
+    code = stickers[0]["code"] if stickers else next((emoji_for(x) for x in title.split() if emoji_for(x)), None)
+    icon = "".join(chr(int(c, 16)) for c in code.split("-")) if code else "🎬"
+    keys = {stem(hl["word"]) for hl in highlights}
+    points = [x for x in sents[1:] if keys & {stem(t) for t in x["text"].split()}][:3]
+    if not points:
+        points = sorted(sents[1:], key=lambda x: -len(x["text"]))[:3]
+        points.sort(key=lambda x: x["start"])
+    lines = [f"{icon} {title}".strip(), ""] + [f"• {x['text']}" for x in points]
+    if sections:
+        lines += ["", "📌 المحتوى:"]
+        if sections[0]["start"] / speed > 1:
+            lines.append("00:00 البداية")
+        lines += [f"{clock(x['start'] / speed)} {x['label']}" for x in sections]
+    if opts["end_card_contact"].strip():
+        lines += ["", f"📲 {opts['end_card_title'] or 'تابعنا'}: {opts['end_card_contact'].strip()}"]
+    forms = {}
+    for w in words:
+        t = stem(w["text"])
+        if len(t) >= 3 and parse_number(t) is None and not any(
+                t in group for group in (AR_STOP, STOPWORDS, FILLERS, CUES, ORDINALS, SECTION_NOUNS, STANDALONE)):
+            forms.setdefault(t, Counter())[re.sub(r"[^\w]", "", w["text"])] += 1
+    top = sorted(forms.items(), key=lambda kv: -sum(kv[1].values()))[:6]
+    tags = [f"#{c.most_common(1)[0][0]}" for _, c in top] + ["#ريلز", "#اكسبلور"]
+    lines += ["", " ".join(dict.fromkeys(tags))]
+    return "\n".join(lines).strip() + "\n"
+
+
+def translate_items(items, code, log):
+    """English subtitle lines -> another language, fully offline after a one-time model download."""
+    try:
+        import argostranslate.package
+        import argostranslate.translate
+    except ImportError:
+        log("تثبيت مكتبة الترجمة (مرة وحدة، حجمها كبير ~1-2 جيجا، يمكن ياخذ وقت)...")
+        proc = subprocess.run([sys.executable, "-m", "pip", "install", "argostranslate"],
+                              capture_output=True, encoding="utf-8", errors="replace")
+        if proc.returncode:
+            log(f"⚠️ تعذّر تثبيت مكتبة الترجمة: {proc.stderr[-200:]}")
+            return None
+        import argostranslate.package
+        import argostranslate.translate
+
+    def ready():
+        langs = {lang.code: lang for lang in argostranslate.translate.get_installed_languages()}
+        return "en" in langs and code in langs and langs["en"].get_translation(langs[code]) is not None
+
+    if not ready():
+        log(f"تنزيل نموذج الترجمة للإنجليزي ← {LANGS.get(code, code)} (مرة وحدة)...")
+        argostranslate.package.update_package_index()
+        pkg = next((p for p in argostranslate.package.get_available_packages()
+                    if p.from_code == "en" and p.to_code == code), None)
+        if not pkg:
+            log(f"⚠️ ما فيه نموذج ترجمة لهذي اللغة ({code})")
+            return None
+        argostranslate.package.install_from_path(pkg.download())
+    return [dict(it, text=argostranslate.translate.translate(it["text"], "en", code)) for it in items]
+
+
 # ---------------------------------------------------------------- rendering
 
 LOOKS = {
@@ -1114,7 +1208,7 @@ def plan_broll(brolls, duration, reel_no):
     return placed
 
 
-def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, tracks, log, progress):
+def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, tracks, log, progress, extras=True):
     w, h = ASPECTS.get(opts["aspect"], ASPECTS["9:16"])
     _, _, _, box_hex = PALETTES.get(opts["caption_color"], PALETTES["orange"])
     parts_dir = os.path.join(job_dir, f"{prefix}_parts")
@@ -1297,6 +1391,18 @@ def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, track
         write_srt(os.path.join(job_dir, f"{prefix}.srt"), chunks)
     if en_items:
         write_srt(os.path.join(job_dir, f"{prefix}_en.srt"), en_items)
+    srt_tr = None
+    if extras and opts["translate_to"] and en_all:
+        try:
+            translated = translate_items(en_all, opts["translate_to"], log)
+        except Exception as exc:  # network / model problems shouldn't stop the edit
+            log(f"⚠️ الترجمة ({opts['translate_to']}) ما اشتغلت: {str(exc)[:150]}")
+            translated = None
+        if translated:
+            srt_tr = f"{prefix}_{opts['translate_to']}.srt"
+            write_srt(os.path.join(job_dir, srt_tr), translated)
+    elif extras and opts["translate_to"]:
+        log("⚠️ الترجمة للغة ثانية تحتاج تفريغ الصوت والترجمة الإنجليزية، وما توفروا")
 
     # 3. thumbnail (from the clean cut, before captions are burned in)
     thumb = None
@@ -1444,6 +1550,12 @@ def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, track
             "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", final]
     run(cmd, cwd=job_dir)
 
+    post = None
+    if extras and opts["post_text"] and words:
+        post = build_post(words, hook, highlights, sections, stickers, opts, speed)
+        with open(os.path.join(job_dir, f"{prefix}_post.txt"), "w", encoding="utf-8-sig") as f:
+            f.write(post)
+
     shutil.rmtree(parts_dir, ignore_errors=True)
     for leftover in (joined, f"{prefix}_parts.txt", f"{prefix}_end.mp4"):
         if os.path.exists(os.path.join(job_dir, leftover)):
@@ -1456,6 +1568,9 @@ def render_reel(job_dir, prefix, reel_no, segments, english, opts, assets, track
         "seconds": round(total / speed, 2),
         "broll": len(brolls),
         "highlights": [hl["word"] for hl in highlights],
+        "srt_translated": srt_tr,
+        "post": post,
+        "post_file": f"{prefix}_post.txt" if post else None,
         "stickers": len(stickers),
         "sections": [{"t": round(x["start"] / speed, 1), "label": x["label"]} for x in sections],
     }
@@ -1603,6 +1718,11 @@ def apply_edits(segments, edits):
     return out
 
 
+def extra_aspects(opts):
+    wanted = [a for key, a in (("also_4x5", "4:5"), ("also_1x1", "1:1"), ("also_16x9", "16:9")) if opts.get(key)]
+    return [a for a in wanted if a != opts["aspect"]]
+
+
 def render_plan(job_dir, plan, options, assets=None, edits=None, preview=False, log=print):
     opts = normalize_options(options)
     emit = make_emitter(log)
@@ -1665,7 +1785,14 @@ def render_plan(job_dir, plan, options, assets=None, edits=None, preview=False, 
             label = f"[ريل {k + 1}/{len(reels)}] " if len(reels) > 1 else ""
             emit(label + msg, base + 0.66 * frac / len(reels))
 
-        results.append(render_reel(job_dir, prefix, k, reel, english, opts, assets, tracks, emit, progress))
+        main = render_reel(job_dir, prefix, k, reel, english, opts, assets, tracks, emit, progress)
+        main["variants"] = []
+        for aspect in ([] if preview else extra_aspects(opts)):
+            emit(f"نسخة بمقاس {aspect}...")
+            v = render_reel(job_dir, f"{prefix}_{aspect.replace(':', 'x')}", k, reel, english,
+                            dict(opts, aspect=aspect), assets, tracks, emit, lambda *a: None, extras=False)
+            main["variants"].append({"aspect": aspect, "final": v["final"], "thumbnail": v["thumbnail"]})
+        results.append(main)
 
     result = {
         "preview": preview,
