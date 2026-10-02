@@ -97,7 +97,7 @@ let busy = false;
 function refresh() {
   const ready = clips.filter((c) => c.id);
   const uploading = clips.some((c) => c.uploading);
-  $("go").disabled = $("quick").disabled = !ready.length || uploading || busy;
+  $("go").disabled = $("quick").disabled = $("navy").disabled = !ready.length || uploading || busy;
   if (busy || (current && !uploading)) return; // keep the finished job's log on screen
   if (uploading) $("log").textContent = "جارٍ رفع الفيديو...";
   else if (ready.length) $("log").textContent = `${ready.length} فيديو جاهز. اختر التعديلات واضغط "ابدأ المونتاج".`;
@@ -238,6 +238,7 @@ function remember() {
 })();
 $("go").onclick = () => startJobs(readOptions().review_mode ? "review" : "auto");
 $("quick").onclick = () => startJobs("preview");
+$("navy").onclick = () => startJobs("navygold");
 
 async function poll(id) {
   const job = await fetch(`/api/status/${id}`).then((r) => r.json());
@@ -374,7 +375,34 @@ $("rvPreviewBtn").onclick = () => sendReview(true);
 
 // ---------------------------------------------------------------- results
 
+function showNavy(id, r) {
+  const base = `/workspace/jobs/${id}/`;
+  $("result").innerHTML = `
+    <div class="reel">
+      <h3>🎨 كحلي وذهبي (${r.seconds} ث، ${r.scenes.scenes.length} رسم)</h3>
+      <video controls preload="metadata" src="${base}${r.final}?v=${r.version || 0}"></video>
+      <div class="downloads"><a href="${base}${r.final}" download>⬇️ تحميل الفيديو MP4</a></div>
+      <label class="small">✏️ خطة الرسوم (scenes.json): غيّر الرسم أو التوقيت واضغط ارسم من جديد.
+        الأنواع: timeline, month_tabs, number_circles, checklist, quote, marker, table, title_strip, verse,
+        pie_clock, compare_bars, steps, bar_chart, icon, pitch, text</label>
+      <textarea class="scenes" id="scenesBox">${esc(JSON.stringify(r.scenes, null, 2))}</textarea>
+      <label class="small">📝 الكلام بالتوقيت</label>
+      <textarea class="scenes" readonly style="direction:rtl;text-align:right;min-height:120px">${esc(r.transcript || "")}</textarea>
+      <button class="btn2 navy" id="navyAgain">🔁 ارسم من جديد</button>
+      <div class="files" id="navyMsg"></div>
+    </div>`;
+  $("navyAgain").onclick = async () => {
+    let scenes;
+    try { scenes = JSON.parse($("scenesBox").value); } catch (e) { $("navyMsg").textContent = `❌ فيه خطأ في الكتابة: ${e.message}`; return; }
+    const res = await api(`/api/navygold/${id}`, { scenes });
+    if (res.error) { $("navyMsg").textContent = res.error; return; }
+    setBusy(true);
+    poll(id);
+  };
+}
+
 function showResult(id, r) {
+  if (r.navygold) return showNavy(id, r);
   const base = `/workspace/jobs/${id}/`;
   const link = (file, label) => (file ? `<a href="${base}${file}" download>${label}</a>` : "");
   const many = r.reels.length > 1;

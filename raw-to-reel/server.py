@@ -13,6 +13,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
 import editor
+import navygold
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORK = os.path.join(HERE, "workspace")
@@ -56,6 +57,22 @@ def worker():
                 job["progress"] = progress
 
         try:
+            if step == "navygold":
+                plan = editor.analyze(job["dir"], job["inputs"], job["options"], log)
+                log("قص فيديو نظيف للتصميم...", 0.6)
+                navygold.prepare(job["dir"], plan, job["options"], job["assets"], log=log)
+                navygold.auto_scenes(job["dir"])
+                step = "navyrender"
+            if step == "navyrender":
+                if payload.get("scenes"):
+                    write_json(os.path.join(job["dir"], "scenes.json"), payload["scenes"])
+                log("رسم التصميم الكحلي والذهبي...", 0.8)
+                navygold.render(job["dir"], log=log)
+                job["progress"] = 1.0
+                job["version"] = job.get("version", 0) + 1
+                job["result"] = navygold_result(job)
+                job["status"] = "done"
+                continue
             if step in ("analyze", "auto", "preview"):
                 job["plan"] = editor.analyze(job["dir"], job["inputs"], job["options"], log)
                 job["review"] = editor.review_summary(job["plan"])
@@ -71,9 +88,21 @@ def worker():
         except Exception as exc:  # report any pipeline failure to the UI
             traceback.print_exc()
             job["log"].append(f"❌ {exc}")
-            job["status"] = "review" if job.get("plan") else "error"
+            job["status"] = "done" if job.get("result") else "review" if job.get("plan") else "error"
         finally:
             TASKS.task_done()
+
+
+def navygold_result(job):
+    meta = read_json(os.path.join(job["dir"], "navygold.json"), {})
+    try:
+        with open(os.path.join(job["dir"], "transcript.txt"), encoding="utf-8") as f:
+            transcript = f.read()
+    except OSError:
+        transcript = ""
+    return {"navygold": True, "final": "navygold.mp4", "seconds": round(meta.get("duration", 0), 1),
+            "scenes": read_json(os.path.join(job["dir"], "scenes.json"), {"scenes": []}),
+            "transcript": transcript, "version": job.get("version", 0)}
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -184,6 +213,18 @@ class Handler(SimpleHTTPRequestHandler):
             job["status"] = "queued"
             TASKS.put((job["id"], "render", edits))
             return self.send_json({"id": job["id"]})
+        if path.startswith("/api/navygold/"):
+            job = JOBS.get(path.rsplit("/", 1)[-1])
+            if not job or not os.path.exists(os.path.join(job["dir"], "navygold.json")):
+                return self.send_json({"error": "سوّ التصميم الكحلي أول"}, 400)
+            if job["status"] in ("queued", "running"):
+                return self.send_json({"error": "انتظر، الرسم شغّال"}, 400)
+            scenes = self.read_body().get("scenes")
+            if not isinstance(scenes, dict) or not isinstance(scenes.get("scenes"), list):
+                return self.send_json({"error": "الخطة لازم فيها \"scenes\": [...]"}, 400)
+            job["status"] = "queued"
+            TASKS.put((job["id"], "navyrender", {"scenes": scenes}))
+            return self.send_json({"id": job["id"]})
         if path == "/api/dictionary":
             entries = {editor.norm_ar(k): v.strip() for k, v in self.read_body().items()
                        if editor.norm_ar(k) and str(v).strip()}
@@ -230,7 +271,8 @@ class Handler(SimpleHTTPRequestHandler):
                             "result": None, "preview": None, "review": None, "plan": None, "created": time.time(),
                             "inputs": group, "assets": assets, "options": options,
                             "name": "، ".join(os.path.basename(v).split("-", 1)[-1] for v in group)}
-            TASKS.put((job_id, "auto" if batch else {"review": "analyze"}.get(mode, mode), {}))
+            step = "navygold" if mode == "navygold" else "auto" if batch else {"review": "analyze"}.get(mode, mode)
+            TASKS.put((job_id, step, {}))
             ids.append(job_id)
         self.send_json({"id": ids[0], "ids": ids})
 

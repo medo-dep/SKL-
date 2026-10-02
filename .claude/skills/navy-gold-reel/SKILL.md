@@ -60,6 +60,8 @@ Planning it yourself is much better. Follow these rules:
 Scene fields: `start`, `end`, `graphic`, and optionally `frame` (`framed` | `small` | `full` | `hidden`) and `bg` (`plain` | `paper`).
 Good defaults are chosen when you leave them out: paper types and the clock/pitch/steps/bars get `hidden`, everything else gets `framed`.
 
+Shortcut without Claude: the "🎨 تصميم كحلي وذهبي" button on the Raw to Reel page runs analyze + auto + render, and shows `scenes.json` in an editable box with a "🔁 ارسم من جديد" button.
+
 ## 3. Render and check
 
 ```

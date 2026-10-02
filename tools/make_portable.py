@@ -44,6 +44,10 @@ README = """Raw to Reel - نسخة محمولة
 
 ما تحتاج إنترنت ولا تثبيت أي شي. خلّ النافذة السوداء مفتوحة طول ما أنت تستخدم الأداة.
 (ميزة B-roll و الصور من Pexels بس هي اللي تحتاج إنترنت.)
+
+🎨 التصميم الكحلي والذهبي: ارفع الفيديو واضغط زر "تصميم كحلي وذهبي". يشتغل كله بدون نت.
+المهارات (raw-to-reel و navy-gold-reel) موجودة في مجلد .claude\skills. إذا ثبّت Claude Code وفتحته
+في هالمجلد تقدر تكتب /navy-gold-reel عشان يخطط الرسوم من كلامك.
 """
 
 
@@ -114,6 +118,9 @@ def main():
     step("Copying Raw to Reel")
     shutil.copytree(os.path.join(ROOT, "raw-to-reel"), os.path.join(OUT, "raw-to-reel"),
                     ignore=shutil.ignore_patterns("workspace", "__pycache__", "whisper"))
+    step("Copying the Claude Code skills")
+    shutil.copytree(os.path.join(ROOT, ".claude", "skills"), os.path.join(OUT, ".claude", "skills"),
+                    ignore=shutil.ignore_patterns("__pycache__"))
 
     python = os.path.join(py_dir, "python.exe")
     whisper_dir = os.path.join(OUT, "raw-to-reel", "models", "whisper")
@@ -124,7 +131,7 @@ def main():
                            args.model, whisper_dir])
 
     step("Checking the portable Python")
-    subprocess.check_call([python, "-c", "import cv2, numpy, faster_whisper, editor, server; print('   all imports OK')"],
+    subprocess.check_call([python, "-c", "import cv2, numpy, faster_whisper, editor, server, navygold, designs; print('   all imports OK')"],
                           cwd=os.path.join(OUT, "raw-to-reel"))
 
     with open(os.path.join(OUT, "Start Raw to Reel.bat"), "w", encoding="ascii", newline="\r\n") as f:

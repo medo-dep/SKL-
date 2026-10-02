@@ -66,6 +66,8 @@
   .warn { font-size: 13px; margin-top: 8px; color: #c0392b; }
   .saved { color: #2e9d55; font-size: 12px; text-align: center; margin-top: 8px; opacity: .4; }
   .btn2 { width: 100%; margin-top: 8px; background: #fff; color: var(--orange); border: 2px solid var(--orange); border-radius: 10px; padding: 11px; font-size: 15px; font-weight: 700; cursor: pointer; }
+  .btn2.navy { color: #C9A149; background: #121F38; border-color: #C9A149; }
+  .scenes { width: 100%; min-height: 220px; direction: ltr; text-align: left; font: 12px/1.5 monospace; margin-top: 6px; }
   .btn2:disabled { opacity: .45; cursor: not-allowed; }
   .mini { border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 7px 10px; font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; }
   .mini:hover { border-color: var(--orange); color: var(--orange); }
@@ -352,6 +354,7 @@
         <label class="switch"><input type="checkbox" data-opt="batch"><span></span></label></div>
       <button class="go" id="go" disabled>✂️ ابدأ المونتاج</button>
       <button class="btn2" id="quick" disabled>👁️ معاينة سريعة (أول 15 ثانية)</button>
+      <button class="btn2 navy" id="navy" disabled title="المتكلم في إطار يلمع على كحلي، الكلام كلمة كلمة، ورسوم متحركة لكل فكرة">🎨 تصميم كحلي وذهبي (موشن جرافيك)</button>
       <div id="jobs"></div>
       <div class="progress"><div id="bar"></div></div>
       <div class="log" id="log">أضف فيديو للبدء.</div>

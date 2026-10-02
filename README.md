@@ -42,3 +42,11 @@ git clone https://github.com/medo-dep/skl-
 3. دبل كليك على **`Start Raw to Reel.bat`**. ما يحتاج إنترنت ولا تثبيت.
 
 > ميزة Pexels (B-roll والصور التلقائية) هي الوحيدة اللي تحتاج إنترنت.
+
+## Skills (Claude Code)
+
+- `/raw-to-reel`: opens the editor page.
+- `/navy-gold-reel`: navy & gold motion-graphics reel. Claude reads the speech and picks a graphic for each idea (`raw-to-reel/navygold.py`).
+  Without Claude: the "🎨 تصميم كحلي وذهبي" button on the page does it automatically, and you can edit the plan and redraw on the same page.
+
+Everything runs offline after setup. The only one-time download is the speech-to-text model; `make-portable.bat` puts it inside the portable copy. Pexels B-roll is the only feature that needs internet.
