@@ -64,6 +64,7 @@ DEFAULT_OPTIONS = {
     "cut_silences": True,
     "zoom_cuts": True,
     "auto_reframe": True,  # follow the speaker's face when cropping
+    "podcast_mode": False,  # several people: cut to whoever is talking
     "speed": 1.0,
     "target_length": 0,  # seconds, 0 = auto
     "split_reels": False,
@@ -994,8 +995,11 @@ def video_filter(opts, crop):
 
 # ---------------------------------------------------------------- face tracking
 
-def track_faces(path, log, fps=2.0):
-    """Face positions sampled `fps` times a second, normalised to the displayed frame; None if unavailable."""
+def track_faces(path, log, fps=2.0, speakers=False):
+    """Face positions sampled `fps` times a second, normalised to the displayed frame; None if unavailable.
+
+    speakers=True (podcast mode): follow whoever is talking, judged by how much each person's mouth moves.
+    """
     try:
         import cv2
         import numpy as np
@@ -1028,13 +1032,15 @@ def track_faces(path, log, fps=2.0):
 
     proc = subprocess.Popen(["ffmpeg", "-v", "error", "-i", path, "-vf", vf, "-fps_mode", "passthrough", "-pix_fmt", "bgr24",
                              "-f", "rawvideo", "-"], stdout=subprocess.PIPE)
-    size, samples, i = fw * fh * 3, [], 0
+    size, samples, per_frame, i = fw * fh * 3, [], [], 0
     while True:
         buf = proc.stdout.read(size)
         if len(buf) < size:
             break
         frame = np.frombuffer(buf, np.uint8).reshape(fh, fw, 3)
         _, faces = detector.detect(frame)
+        if speakers:
+            per_frame.append(mouth_patches(cv2, np, frame, faces, fw, fh))
         box = None
         if faces is not None and len(faces):
             x, y, w, h = max(faces, key=lambda f: f[2] * f[3])[:4]
@@ -1045,7 +1051,81 @@ def track_faces(path, log, fps=2.0):
     found = sum(1 for _, b in samples if b)
     if not found:
         return None
-    return {"aspect": fw / fh, "samples": samples, "found": found / max(1, len(samples))}
+    track = {"aspect": fw / fh, "samples": samples, "found": found / max(1, len(samples))}
+    if speakers:
+        follow = speaker_samples(np, per_frame, fps)
+        if follow:
+            track["samples"], track["speakers"], track["switches"] = follow
+    return track
+
+
+def mouth_patches(cv2, np, frame, faces, fw, fh):
+    """Every face in the frame with a small normalised image of its mouth (YuNet landmarks 10-13 = mouth corners)."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    out = []
+    for f in faces if faces is not None else []:
+        x, y, w, h = (float(v) for v in f[:4])
+        rx, ry, lx, ly = (float(v) for v in f[10:14])
+        mw, my = max(4.0, abs(lx - rx)), (ry + ly) / 2
+        x0, x1 = int(max(0, min(rx, lx) - 0.2 * mw)), int(min(fw, max(rx, lx) + 0.2 * mw))
+        y0, y1 = int(max(0, my - 0.35 * mw)), int(min(fh, my + 0.6 * mw))
+        patch = gray[y0:y1, x0:x1]
+        if patch.size:
+            patch = cv2.resize(patch, (24, 16)).astype(np.float32)
+            patch = (patch - patch.mean()) / (patch.std() + 1e-3)
+        else:
+            patch = None
+        out.append(((x + w / 2) / fw, (y + h / 2) / fh, w / fw, h / fh, patch))
+    return out
+
+
+def speaker_samples(np, per_frame, fps, min_shot=2.0):
+    """Pick the active speaker per sample: most mouth movement, switching at most every `min_shot` seconds."""
+    xs = sorted(f[0] for faces in per_frame for f in faces)
+    if not xs:
+        return None
+    # people = groups of face positions across the frame (split where there's a big horizontal gap)
+    groups, cur = [], [xs[0]]
+    for x in xs[1:]:
+        if x - cur[-1] > 0.12:
+            groups.append(cur)
+            cur = []
+        cur.append(x)
+    groups.append(cur)
+    groups = [g for g in groups if len(g) >= max(3, 0.1 * len(per_frame))][:4]
+    if len(groups) < 2:
+        return None
+    centers = [sum(g) / len(g) for g in groups]
+    n, frames = len(centers), len(per_frame)
+    energy, boxes, prev = np.zeros((frames, n)), [[None] * n for _ in range(frames)], [None] * n
+    for i, faces in enumerate(per_frame):
+        patches = [None] * n
+        for f in faces:
+            j = min(range(n), key=lambda c: abs(f[0] - centers[c]))
+            if boxes[i][j] is None or f[2] * f[3] > boxes[i][j][2] * boxes[i][j][3]:
+                boxes[i][j], patches[j] = tuple(float(v) for v in f[:4]), f[4]
+        for j in range(n):
+            if patches[j] is not None and prev[j] is not None:
+                energy[i, j] = float(np.mean(np.abs(patches[j] - prev[j])))
+            prev[j] = patches[j]
+    win = max(1, int(fps))
+    kernel = np.ones(2 * win + 1) / (2 * win + 1)
+    smooth = np.stack([np.convolve(energy[:, j], kernel, mode="same") for j in range(n)], axis=1)
+    active, current, since = [], int(np.argmax(smooth[0])), 0
+    for i in range(frames):
+        best = int(np.argmax(smooth[i]))
+        if best != current and smooth[i, best] > 1.25 * smooth[i, current] and (i - since) / fps >= min_shot:
+            current, since = best, i
+        active.append(current)
+    last = [next((b[j] for b in boxes if b[j]), None) for j in range(n)]
+    samples = []
+    for i in range(frames):
+        j = active[i]
+        if boxes[i][j]:
+            last[j] = boxes[i][j]
+        samples.append((i / fps, last[j]))
+    switches = sum(1 for a, b in zip(active, active[1:]) if a != b)
+    return samples, n, switches
 
 
 def face_keyframes(track, start, end, step=0.5):
@@ -1077,7 +1157,7 @@ def piecewise(points, ramp=0.6):
     """ffmpeg expression in t: hold each value, easing linearly into the next over `ramp` seconds."""
     expr = f"{points[-1][1]:.4f}"
     for (t0, v0), (t1, v1) in reversed(list(zip(points, points[1:]))):
-        a = max(t0, t1 - ramp)
+        a = max(t0, t1 - (ramp if abs(v1 - v0) < 0.25 else 0.04))  # a big jump is a camera cut, not a pan
         expr = (f"if(lt(t,{a:.2f}),{v0:.4f},if(lt(t,{t1:.2f}),"
                 f"{v0:.4f}+({v1 - v0:.4f})*(t-{a:.2f})/{t1 - a:.2f},{expr}))")
     return expr
@@ -1670,8 +1750,12 @@ def analyze(job_dir, inputs, options, log=print):
     tracks = {}
     if opts["auto_reframe"] or opts["caption_position"] == "auto":
         for path in inputs:
-            emit(f"تتبّع الوجه في {os.path.basename(path)}...")
-            tracks[path] = track_faces(path, emit)
+            emit(f"تتبّع الوجه في {os.path.basename(path)}..." + (" (وضع البودكاست)" if opts["podcast_mode"] else ""))
+            tracks[path] = track_faces(path, emit, 4.0 if opts["podcast_mode"] else 2.0, opts["podcast_mode"])
+            if tracks[path] and tracks[path].get("speakers"):
+                emit(f"  {tracks[path]['speakers']} أشخاص، الكاميرا تنتقل للي يتكلم ({tracks[path]['switches']} مرة)")
+            elif tracks[path] and opts["podcast_mode"]:
+                emit("  لقيت شخص واحد بس، بيكون التتبّع عادي")
             if tracks[path]:
                 emit(f"  الوجه ظاهر في {tracks[path]['found'] * 100:.0f}% من الفيديو")
             else:
