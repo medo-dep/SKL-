@@ -49,6 +49,9 @@ have has had about into over after before again also there here up down out more
 too now one two get got going go really thing things like know think want make people lot way well yes
 okay ok today because let us""".split())
 
+DICT_FILE = os.path.join(HERE, "workspace", "dictionary.json")
+PREVIEW_SECONDS = 15
+
 DEFAULT_OPTIONS = {
     # cutting
     "remove_bad_takes": True,
@@ -763,7 +766,7 @@ def track_faces(path, log, fps=2.0):
         box = None
         if faces is not None and len(faces):
             x, y, w, h = max(faces, key=lambda f: f[2] * f[3])[:4]
-            box = ((x + w / 2) / fw, (y + h / 2) / fh, w / fw, h / fh)
+            box = (float((x + w / 2) / fw), float((y + h / 2) / fh), float(w / fw), float(h / fh))
         samples.append((i / fps, box))
         i += 1
     proc.wait()
@@ -1233,36 +1236,151 @@ def write_resolve_exports(job_dir, segments):
 
 # ---------------------------------------------------------------- entry point
 
-def process(job_dir, inputs, options, assets=None, log=print):
+def normalize_options(options):
     opts = {**DEFAULT_OPTIONS, **(options or {})}
     for key in ("speed", "target_length", "reel_length"):
         opts[key] = float(opts[key] or 0)
     opts["speed"] = opts["speed"] or 1.0
     opts["reel_length"] = opts["reel_length"] or 60
+    return opts
+
+
+def load_dictionary():
+    try:
+        with open(DICT_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_dictionary(entries):
+    os.makedirs(os.path.dirname(DICT_FILE), exist_ok=True)
+    with open(DICT_FILE, "w", encoding="utf-8") as f:
+        json.dump(entries, f, ensure_ascii=False, indent=2)
+
+
+def learn_corrections(pairs):
+    """Remember wrong -> right word fixes made on the review page."""
+    entries = load_dictionary()
+    for wrong, right in pairs:
+        if norm_ar(wrong) and right.strip() and norm_ar(wrong) != norm_ar(right):
+            entries[norm_ar(wrong)] = right.strip()
+    save_dictionary(entries)
+
+
+def make_emitter(log):
+    def emit(msg, progress=None):
+        log(msg, progress) if log is not print else print(msg)
+    return emit
+
+
+def analyze(job_dir, inputs, options, log=print):
+    """Transcribe, plan the cuts and track faces. Saves plan.json for the review page and render_plan()."""
+    opts = normalize_options(options)
+    emit = make_emitter(log)
+    os.makedirs(job_dir, exist_ok=True)
+    emit("بدء التحليل...", 0.05)
+    segments, english = plan_cuts(inputs, opts, emit)
+    if not segments:
+        raise RuntimeError("لم يتبقَّ أي جزء من الفيديو بعد القص. جرّب إيقاف حذف الصمت.")
+
+    fixes = load_dictionary()
+    n_fixed, next_id = 0, 0
+    for seg in segments:
+        for w in seg["words"]:
+            w["id"] = next_id
+            next_id += 1
+            right = fixes.get(norm_ar(w["text"]))
+            if right:
+                w["text"], n_fixed = right, n_fixed + 1
+    if n_fixed:
+        emit(f"القاموس صحّح {n_fixed} كلمة")
+
+    tracks = {}
+    if opts["auto_reframe"] or opts["caption_position"] == "auto":
+        for path in inputs:
+            emit(f"تتبّع الوجه في {os.path.basename(path)}...")
+            tracks[path] = track_faces(path, emit)
+            if tracks[path]:
+                emit(f"  الوجه ظاهر في {tracks[path]['found'] * 100:.0f}% من الفيديو")
+            else:
+                emit("  ما لقيت وجه، بيكون القص من النص والكتابة في مكانها العادي")
+
+    plan = {"inputs": inputs, "segments": segments, "english": english, "tracks": tracks,
+            "input_seconds": round(sum(probe(p)["duration"] for p in inputs), 2)}
+    with open(os.path.join(job_dir, "plan.json"), "w", encoding="utf-8") as f:
+        json.dump(plan, f, ensure_ascii=False)
+    emit(f"التحليل خلص: {len(segments)} لقطة، {plan['input_seconds']:.1f}ث ← "
+         f"{sum(seg_len(s) for s in segments):.1f}ث", 0.3)
+    return plan
+
+
+def load_plan(job_dir):
+    with open(os.path.join(job_dir, "plan.json"), encoding="utf-8") as f:
+        plan = json.load(f)
+    plan["english"] = {int(k): v for k, v in (plan.get("english") or {}).items()}
+    return plan
+
+
+def review_summary(plan):
+    """What the review page shows: kept words per segment, with source times for the player."""
+    return [{"seg": i, "file": os.path.basename(s["file"]), "index": s["index"], "start": s["start"], "end": s["end"],
+             "words": [{"id": w["id"], "text": w["text"], "start": round(w["start"], 2)} for w in s["words"]]}
+            for i, s in enumerate(plan["segments"])]
+
+
+def apply_edits(segments, edits):
+    """Review page edits: remove words (cut them out of the video) and correct word text."""
+    removed = set(edits.get("removed") or [])
+    fixes = {int(k): v for k, v in (edits.get("corrections") or {}).items()}
+    removed_segs = set(edits.get("removed_segments") or [])
+    out = []
+    for i, seg in enumerate(segments):
+        if i in removed_segs:
+            continue
+        words = [dict(w, text=fixes.get(w["id"], w["text"])) for w in seg["words"]]
+        cuts = [(w["start"] - 0.03, w["end"] + 0.03) for w in words if w["id"] in removed]
+        for s0, e0 in subtract((seg["start"], seg["end"]), cuts) if cuts else [(seg["start"], seg["end"])]:
+            out.append(dict(seg, start=round(s0, 3), end=round(e0, 3),
+                            words=[w for w in words if w["id"] not in removed
+                                   and w["start"] >= s0 - 0.05 and w["end"] <= e0 + 0.05]))
+    return out
+
+
+def render_plan(job_dir, plan, options, assets=None, edits=None, preview=False, log=print):
+    opts = normalize_options(options)
+    emit = make_emitter(log)
     assets = dict(assets or {})
     assets["broll"] = list(assets.get("broll") or []) if opts["broll"] else []
     os.makedirs(os.path.join(job_dir, "fonts"), exist_ok=True)
     if os.path.exists(FONT_FILE):
         shutil.copy(FONT_FILE, os.path.join(job_dir, "fonts"))
-
-    def emit(msg, progress=None):
-        log(msg, progress) if log is not print else print(msg)
-
     for opt, asset, label in (("music", "music", "موسيقى"), ("logo", "logo", "شعار")):
         if opts[opt] and not assets.get(asset):
             emit(f"⚠️ مفعّل «{label}» بس ما رفعت ملف، بيتم التخطي")
     if opts["broll"] and not assets["broll"]:
         emit("⚠️ مفعّل «B-roll خاص» بس ما رفعت صور أو مقاطع")
 
-    emit("بدء التحليل...", 0.05)
-    segments, english = plan_cuts(inputs, opts, emit)
+    segments = apply_edits(plan["segments"], edits or {})
     if not segments:
-        raise RuntimeError("لم يتبقَّ أي جزء من الفيديو بعد القص. جرّب إيقاف حذف الصمت.")
-    total_in = sum(probe(p)["duration"] for p in inputs)
+        raise RuntimeError("حذفت كل شي! رجّع بعض الكلام وجرّب مرة ثانية.")
+    english, tracks = plan["english"], plan["tracks"]
+    if preview:
+        trimmed, total = [], 0.0
+        for seg in segments:
+            if total >= PREVIEW_SECONDS:
+                break
+            if seg_len(seg) > PREVIEW_SECONDS - total:
+                seg = split_segment(seg, seg["start"] + PREVIEW_SECONDS - total)[0]
+            trimmed.append(seg)
+            total += seg_len(seg)
+        segments = trimmed
+        opts.update(split_reels=False, thumbnail=False, end_card=False)
+    else:
+        write_resolve_exports(job_dir, segments)
     total_out = sum(seg_len(s) for s in segments)
-    write_resolve_exports(job_dir, segments)
 
-    if opts["pexels"]:
+    if opts["pexels"] and not preview:
         if not opts["pexels_key"].strip():
             emit("⚠️ B-roll من Pexels يحتاج مفتاح API، بيتم التخطي")
         else:
@@ -1275,47 +1393,43 @@ def process(job_dir, inputs, options, assets=None, log=print):
             else:
                 emit("⚠️ ما قدرت أطلع كلمات بحث لـ Pexels، اكتبها بنفسك بالإنجليزي")
 
-    tracks = {}
-    if opts["auto_reframe"] or opts["caption_position"] == "auto":
-        for path in inputs:
-            emit(f"تتبّع الوجه في {os.path.basename(path)}...")
-            tracks[path] = track_faces(path, emit)
-            if tracks[path]:
-                emit(f"  الوجه ظاهر في {tracks[path]['found'] * 100:.0f}% من الفيديو")
-            else:
-                emit("  ما لقيت وجه، بيكون القص من النص والكتابة في مكانها العادي")
-
     reels = split_into_reels(segments, opts["reel_length"]) if opts["split_reels"] else [segments]
-    emit(f"الخطة: {len(segments)} لقطة، {total_in:.1f}ث ← {total_out:.1f}ث"
-         + (f"، {len(reels)} ريلز" if len(reels) > 1 else ""), 0.3)
+    emit(("معاينة أول 15 ثانية..." if preview else f"المونتاج: {len(segments)} لقطة، {total_out:.1f}ث")
+         + (f"، {len(reels)} ريلز" if len(reels) > 1 else ""), 0.32)
 
     results = []
     for k, reel in enumerate(reels):
-        prefix = "final" if len(reels) == 1 else f"reel_{k + 1}"
-        base = 0.3 + 0.68 * k / len(reels)
+        prefix = "preview" if preview else ("final" if len(reels) == 1 else f"reel_{k + 1}")
+        base = 0.32 + 0.66 * k / len(reels)
 
         def progress(msg, frac, base=base, k=k):
             label = f"[ريل {k + 1}/{len(reels)}] " if len(reels) > 1 else ""
-            emit(label + msg, base + 0.68 * frac / len(reels))
+            emit(label + msg, base + 0.66 * frac / len(reels))
 
         results.append(render_reel(job_dir, prefix, k, reel, english, opts, assets, tracks, emit, progress))
 
-    safe_opts = {k: v for k, v in opts.items() if k != "pexels_key"}
     result = {
+        "preview": preview,
         "reels": results,
         "final": results[0]["final"],
-        "edl": "timeline.edl",
-        "resolve_script": "resolve_import.py",
+        "edl": None if preview else "timeline.edl",
+        "resolve_script": None if preview else "resolve_import.py",
         "captions_missing": bool(opts["captions"] and not any(r["srt"] for r in results)),
         "segments": len(segments),
-        "input_seconds": round(total_in, 2),
+        "input_seconds": plan["input_seconds"],
         "output_seconds": round(sum(r["seconds"] for r in results), 2),
-        "options": safe_opts,
+        "options": {k: v for k, v in opts.items() if k != "pexels_key"},
     }
-    with open(os.path.join(job_dir, "result.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(job_dir, "preview.json" if preview else "result.json"), "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
-    emit("✅ تم! الفيديو جاهز" if len(results) == 1 else f"✅ تم! {len(results)} ريلز جاهزة", 1.0)
+    emit("✅ المعاينة جاهزة" if preview else
+         ("✅ تم! الفيديو جاهز" if len(results) == 1 else f"✅ تم! {len(results)} ريلز جاهزة"), 1.0)
     return result
+
+
+def process(job_dir, inputs, options, assets=None, log=print):
+    """One click: analyse and render straight away."""
+    return render_plan(job_dir, analyze(job_dir, inputs, options, log), options, assets, log=log)
 
 
 if __name__ == "__main__":

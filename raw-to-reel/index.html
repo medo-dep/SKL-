@@ -65,6 +65,33 @@
   .downloads a:hover { border-color: var(--orange); color: var(--orange); }
   .warn { font-size: 13px; margin-top: 8px; color: #c0392b; }
   .saved { color: #2e9d55; font-size: 12px; text-align: center; margin-top: 8px; opacity: .4; }
+  .btn2 { width: 100%; margin-top: 8px; background: #fff; color: var(--orange); border: 2px solid var(--orange); border-radius: 10px; padding: 11px; font-size: 15px; font-weight: 700; cursor: pointer; }
+  .btn2:disabled { opacity: .45; cursor: not-allowed; }
+  .mini { border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 7px 10px; font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; }
+  .mini:hover { border-color: var(--orange); color: var(--orange); }
+  .presets { display: flex; gap: 6px; margin-bottom: 10px; }
+  .presets select { flex: 1; }
+  .job { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-top: 8px; font-size: 13px; cursor: pointer; }
+  .job.active { border-color: var(--orange); }
+  .job .jbar { height: 4px; background: #f1ebe5; border-radius: 4px; margin-top: 6px; overflow: hidden; }
+  .job .jbar div { height: 100%; background: var(--orange); }
+  #review { display: none; max-width: 1340px; margin: 0 auto 30px; padding: 0 32px; }
+  #review.show { display: block; }
+  #review .card { display: grid; grid-template-columns: 340px 1fr; gap: 20px; }
+  @media (max-width: 960px) { #review .card { grid-template-columns: 1fr; } }
+  #review video { width: 100%; border-radius: 10px; background: #000; max-height: 560px; }
+  .transcript { max-height: 560px; overflow: auto; line-height: 2.3; font-size: 17px; }
+  .seg { padding: 6px 8px; border-radius: 8px; margin-bottom: 4px; }
+  .seg:hover { background: #fbf7f3; }
+  .seg.cut { opacity: .35; text-decoration: line-through; }
+  .seg .tools { float: left; opacity: 0; transition: .2s; }
+  .seg:hover .tools { opacity: 1; }
+  .w { cursor: pointer; padding: 1px 2px; border-radius: 4px; }
+  .w:hover { background: #ffe6dc; }
+  .w.del { text-decoration: line-through; color: #c0392b; background: #fdecea; }
+  .w.fixed { border-bottom: 2px solid #2e9d55; }
+  .w.playing { background: #ffd8c8; }
+  .help { font-size: 12px; color: var(--muted); margin: 0 0 10px; line-height: 1.8; }
 </style>
 </head>
 <body>
@@ -90,6 +117,11 @@
 
   <section class="col">
     <h2><span class="num">2</span> اختر التعديلات المطلوبة</h2>
+    <div class="presets">
+      <select id="presetSel"><option value="">📁 القوالب المحفوظة…</option></select>
+      <button class="mini" id="presetSave" title="احفظ الإعدادات الحالية كقالب">💾 حفظ</button>
+      <button class="mini" id="presetDel" title="احذف القالب المختار">🗑️</button>
+    </div>
 
     <details open>
       <summary>✂️ القص والمونتاج</summary>
@@ -237,6 +269,16 @@
     </details>
 
     <details>
+      <summary>📖 قاموس التصحيح</summary>
+      <div class="body">
+        <p class="help">كلمات يكتبها التفريغ غلط، ينصلح تلقائياً في كل فيديو. سطر لكل كلمة: <b>الغلط = الصح</b><br>
+          والتصحيحات اللي تسويها في صفحة المراجعة تنضاف هنا تلقائياً.</p>
+        <textarea id="dictBox" dir="rtl" placeholder="ديبو = DEBO&#10;النخل = النخيل" style="min-height:110px"></textarea>
+        <button class="mini" id="dictSave" style="margin-top:6px">💾 حفظ القاموس</button> <span class="files" id="dictMsg"></span>
+      </div>
+    </details>
+
+    <details>
       <summary>📝 ملاحظات</summary>
       <div class="body">
         <textarea data-opt="notes" placeholder="ملاحظات للمونتير، مثلاً: خلّ أول 3 ثواني قوية قدر الإمكان"></textarea>
@@ -248,13 +290,44 @@
   <section class="col">
     <h2><span class="num">3</span> مونتاج بضغطة واحدة</h2>
     <div class="card sticky">
+      <div class="row" style="border-top:0"><div>راجع الكلام قبل المونتاج<span class="hint">تحذف كلمات أو جمل وتصحح الترجمة قبل الإخراج</span></div>
+        <label class="switch"><input type="checkbox" data-opt="review_mode" checked><span></span></label></div>
+      <div class="row"><div>كل فيديو لحاله (دفعة)<span class="hint">إذا رفعت أكثر من فيديو، كل واحد يطلع ريل مستقل</span></div>
+        <label class="switch"><input type="checkbox" data-opt="batch"><span></span></label></div>
       <button class="go" id="go" disabled>✂️ ابدأ المونتاج</button>
+      <button class="btn2" id="quick" disabled>👁️ معاينة سريعة (أول 15 ثانية)</button>
+      <div id="jobs"></div>
       <div class="progress"><div id="bar"></div></div>
       <div class="log" id="log">أضف فيديو للبدء.</div>
       <div id="result"></div>
     </div>
   </section>
 </main>
+
+<section id="review">
+  <h2 style="font-size:16px"><span class="num">✎</span> راجع الكلام قبل المونتاج</h2>
+  <div class="card">
+    <div>
+      <video id="rvPlayer" controls preload="metadata"></video>
+      <div id="rvPreview"></div>
+    </div>
+    <div>
+      <p class="help">
+        • <b>اضغط على كلمة</b> عشان تحذفها من الفيديو (تطلع مشطوبة بالأحمر)، واضغط مرة ثانية ترجعها.<br>
+        • <b>دبل كليك</b> على كلمة عشان تصحح كتابتها في الترجمة.<br>
+        • <b>Alt + ضغطة</b> على كلمة يشغّل الفيديو من عندها. ومربع ✕ جنب كل جملة يحذفها كاملة.
+      </p>
+      <div class="transcript" id="transcript"></div>
+      <div class="row"><div>احفظ تصحيحاتي في القاموس</div>
+        <label class="switch"><input type="checkbox" id="saveDict" checked><span></span></label></div>
+      <div class="grid2" style="margin-top:10px">
+        <button class="btn2" id="rvPreviewBtn">👁️ معاينة 15 ثانية</button>
+        <button class="go" id="rvRender" style="margin-top:8px">✅ منتج الفيديو</button>
+      </div>
+      <div class="files" id="rvStats" style="margin-top:8px"></div>
+    </div>
+  </div>
+</section>
 <script src="/app.js"></script>
 </body>
 </html>

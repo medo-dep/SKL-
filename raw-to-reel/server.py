@@ -2,6 +2,7 @@
 
 import json
 import os
+import queue
 import re
 import threading
 import time
@@ -17,9 +18,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 WORK = os.path.join(HERE, "workspace")
 UPLOADS = os.path.join(WORK, "uploads")
 JOBS_DIR = os.path.join(WORK, "jobs")
+PRESETS_FILE = os.path.join(WORK, "presets.json")
 PORT = int(os.environ.get("PORT", "4680"))
 JOBS = {}
 UPLOAD_KINDS = ("video", "music", "logo", "broll")
+TASKS = queue.Queue()  # one worker: videos are edited one after another, never in parallel
 
 
 def safe_name(name):
@@ -27,21 +30,50 @@ def safe_name(name):
     return re.sub(r"[^\w.\- ]", "_", name) or "file"
 
 
-def run_job(job_id, inputs, options, assets):
-    job = JOBS[job_id]
-
-    def log(msg, progress=None):
-        job["log"].append(msg)
-        if progress is not None:
-            job["progress"] = progress
-
+def read_json(path, default):
     try:
-        job["result"] = editor.process(job["dir"], inputs, options, assets, log)
-        job["status"] = "done"
-    except Exception as exc:  # report any pipeline failure to the UI
-        traceback.print_exc()
-        job["log"].append(f"❌ {exc}")
-        job["status"] = "error"
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def write_json(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def worker():
+    while True:
+        job_id, step, payload = TASKS.get()
+        job = JOBS[job_id]
+        job["status"] = "running"
+
+        def log(msg, progress=None):
+            job["log"].append(msg)
+            if progress is not None:
+                job["progress"] = progress
+
+        try:
+            if step in ("analyze", "auto", "preview"):
+                job["plan"] = editor.analyze(job["dir"], job["inputs"], job["options"], log)
+                job["review"] = editor.review_summary(job["plan"])
+            if step == "auto":
+                job["result"] = editor.render_plan(job["dir"], job["plan"], job["options"], job["assets"], log=log)
+            elif step == "preview" or (step == "render" and payload.get("preview")):
+                job["preview"] = editor.render_plan(job["dir"], job["plan"], job["options"], job["assets"],
+                                                    payload, preview=True, log=log)
+            elif step == "render":
+                job["result"] = editor.render_plan(job["dir"], job["plan"], job["options"], job["assets"],
+                                                   payload, log=log)
+            job["status"] = "done" if job["result"] else "review"
+        except Exception as exc:  # report any pipeline failure to the UI
+            traceback.print_exc()
+            job["log"].append(f"❌ {exc}")
+            job["status"] = "review" if job.get("plan") else "error"
+        finally:
+            TASKS.task_done()
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -59,6 +91,9 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def read_body(self):
+        return json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+
     def do_GET(self):
         url = urlparse(self.path)
         if url.path == "/":
@@ -67,8 +102,16 @@ class Handler(SimpleHTTPRequestHandler):
             job = JOBS.get(url.path.rsplit("/", 1)[-1])
             if not job:
                 return self.send_json({"error": "not found"}, 404)
-            return self.send_json({k: job[k] for k in ("status", "progress", "log", "result", "id")})
-        elif not (url.path in ("/index.html", "/app.js") or url.path.startswith("/workspace/jobs/")):
+            out = {k: job.get(k) for k in ("id", "name", "status", "progress", "log", "result", "preview")}
+            out["review"] = job.get("review") if job["status"] == "review" else None
+            out["ahead"] = sum(1 for j, *_ in list(TASKS.queue) if JOBS[j]["created"] < job["created"])
+            return self.send_json(out)
+        elif url.path == "/api/dictionary":
+            return self.send_json(editor.load_dictionary())
+        elif url.path == "/api/presets":
+            return self.send_json(read_json(PRESETS_FILE, {}))
+        elif not (url.path in ("/index.html", "/app.js")
+                  or url.path.startswith(("/workspace/jobs/", "/workspace/uploads/video/"))):
             return self.send_error(404)
         return super().do_GET()
 
@@ -82,7 +125,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"error": "نوع ملف غير معروف"}, 400)
         folder = os.path.join(UPLOADS, kind)
         os.makedirs(folder, exist_ok=True)
-        name = f"{int(time.time())}-{safe_name(qs.get('name', ['file'])[0])}"
+        name = f"{int(time.time() * 1000)}-{safe_name(qs.get('name', ['file'])[0])}"
         path = os.path.join(folder, name)
         remaining = int(self.headers.get("Content-Length", 0))
         with open(path, "wb") as f:
@@ -103,13 +146,51 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"error": f"تعذّر قراءة الملف: {str(exc)[-300:]}"}, 400)
         self.send_json({"id": name, "kind": kind, "duration": info["duration"]})
 
-    def do_POST(self):
-        if urlparse(self.path).path != "/api/edit":
+    def do_DELETE(self):
+        url = urlparse(self.path)
+        if url.path != "/api/presets":
             return self.send_error(404)
-        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
-        inputs = [os.path.join(UPLOADS, "video", safe_name(v)) for v in body.get("videos", [])]
-        inputs = [p for p in inputs if os.path.exists(p)]
-        if not inputs:
+        presets = read_json(PRESETS_FILE, {})
+        presets.pop(parse_qs(url.query).get("name", [""])[0], None)
+        write_json(PRESETS_FILE, presets)
+        self.send_json(presets)
+
+    def do_POST(self):
+        path = urlparse(self.path).path
+        if path == "/api/edit":
+            return self.start_jobs(self.read_body())
+        if path.startswith("/api/render/"):
+            job = JOBS.get(path.rsplit("/", 1)[-1])
+            if not job or job["status"] != "review":
+                return self.send_json({"error": "المونتاج مو جاهز للمراجعة"}, 400)
+            edits = self.read_body()
+            if edits.get("save_dictionary") and edits.get("corrections"):
+                words = {w["id"]: w["text"] for s in job["plan"]["segments"] for w in s["words"]}
+                editor.learn_corrections((words[int(i)], t) for i, t in edits["corrections"].items()
+                                         if int(i) in words)
+            job["status"] = "queued"
+            TASKS.put((job["id"], "render", edits))
+            return self.send_json({"id": job["id"]})
+        if path == "/api/dictionary":
+            entries = {editor.norm_ar(k): v.strip() for k, v in self.read_body().items()
+                       if editor.norm_ar(k) and str(v).strip()}
+            editor.save_dictionary(entries)
+            return self.send_json(entries)
+        if path == "/api/presets":
+            body = self.read_body()
+            name = (body.get("name") or "").strip()[:60]
+            if not name:
+                return self.send_json({"error": "اكتب اسم للقالب"}, 400)
+            presets = read_json(PRESETS_FILE, {})
+            presets[name] = {k: v for k, v in (body.get("options") or {}).items() if k != "pexels_key"}
+            write_json(PRESETS_FILE, presets)
+            return self.send_json(presets)
+        return self.send_error(404)
+
+    def start_jobs(self, body):
+        videos = [os.path.join(UPLOADS, "video", safe_name(v)) for v in body.get("videos", [])]
+        videos = [p for p in videos if os.path.exists(p)]
+        if not videos:
             return self.send_json({"error": "اختر فيديو واحد على الأقل"}, 400)
 
         def uploaded(kind, name):
@@ -122,19 +203,22 @@ class Handler(SimpleHTTPRequestHandler):
             "broll": [p for p in (uploaded("broll", b) for b in body.get("broll", [])) if p],
         }
         options = body.get("options", {})
-
-        job_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
-        job_dir = os.path.join(JOBS_DIR, job_id)
-        os.makedirs(job_dir, exist_ok=True)
-        with open(os.path.join(job_dir, "job.json"), "w", encoding="utf-8") as f:
-            json.dump({"inputs": inputs, "assets": assets,
-                       "options": {k: v for k, v in options.items() if k != "pexels_key"}},
-                      f, ensure_ascii=False, indent=2)
-        JOBS[job_id] = {"id": job_id, "dir": job_dir, "status": "running", "progress": 0.0,
-                        "log": [], "result": None}
-        threading.Thread(target=run_job, args=(job_id, inputs, options, assets),
-                         daemon=True).start()
-        self.send_json({"id": job_id})
+        mode = body.get("mode", "auto")  # auto | review | preview
+        batch = bool(body.get("batch")) and len(videos) > 1
+        ids = []
+        for group in ([[v] for v in videos] if batch else [videos]):
+            job_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
+            job_dir = os.path.join(JOBS_DIR, job_id)
+            write_json(os.path.join(job_dir, "job.json"),
+                       {"inputs": group, "assets": assets,
+                        "options": {k: v for k, v in options.items() if k != "pexels_key"}})
+            JOBS[job_id] = {"id": job_id, "dir": job_dir, "status": "queued", "progress": 0.0, "log": [],
+                            "result": None, "preview": None, "review": None, "plan": None, "created": time.time(),
+                            "inputs": group, "assets": assets, "options": options,
+                            "name": "، ".join(os.path.basename(v).split("-", 1)[-1] for v in group)}
+            TASKS.put((job_id, "auto" if batch else {"review": "analyze"}.get(mode, mode), {}))
+            ids.append(job_id)
+        self.send_json({"id": ids[0], "ids": ids})
 
 
 class Server(ThreadingHTTPServer):
@@ -148,6 +232,7 @@ class Server(ThreadingHTTPServer):
 def main():
     os.makedirs(UPLOADS, exist_ok=True)
     os.makedirs(JOBS_DIR, exist_ok=True)
+    threading.Thread(target=worker, daemon=True).start()
     server = Server(("127.0.0.1", PORT), Handler)
     url = f"http://127.0.0.1:{PORT}"
     print(f"Raw to Reel is running at {url}")
